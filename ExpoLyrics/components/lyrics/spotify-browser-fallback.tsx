@@ -15,14 +15,14 @@ import {
   AppState,
   type AppStateStatus,
   Platform,
-  Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import { ScrollView } from "react-native-gesture-handler";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
+import { NativeTouchable } from "@/components/ui/native-touchable";
 
 import {
   installBrowserControlPreludeScript,
@@ -670,7 +670,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
             </Text>
           </View>
           <View style={styles.headerActions}>
-            <Pressable
+            <NativeTouchable
               accessibilityLabel="Run Spotify browser diagnostics"
               hitSlop={8}
               onPress={() => sendCommand({ type: "diagnostics" })}
@@ -680,8 +680,8 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
               ]}
             >
               <Ionicons name="pulse" size={18} color="#F8F8FE" />
-            </Pressable>
-            <Pressable
+            </NativeTouchable>
+            <NativeTouchable
               accessibilityLabel="Reload Spotify browser"
               hitSlop={8}
               onPress={() => refreshBrowser(true)}
@@ -691,8 +691,8 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
               ]}
             >
               <Ionicons name="refresh" size={18} color="#F8F8FE" />
-            </Pressable>
-            <Pressable
+            </NativeTouchable>
+            <NativeTouchable
               accessibilityLabel="Close Spotify browser"
               hitSlop={8}
               onPress={() => setBrowserOpen(false)}
@@ -702,7 +702,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
               ]}
             >
               <Ionicons name="close" size={19} color="#F8F8FE" />
-            </Pressable>
+            </NativeTouchable>
           </View>
         </SafeAreaView>
 

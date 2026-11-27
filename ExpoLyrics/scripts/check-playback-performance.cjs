@@ -77,6 +77,7 @@ const mocks = {
     getState: () => state,
     subscribe: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
   } },
+  '@/components/ui/native-touchable': { NativeTouchable: Primitive },
   'react-native-gesture-handler': { GestureDetector: Primitive, Gesture: { Pan: () => {
     gesture = {};
     const builder = { minDistance: () => builder, enabled: value => { gesture.enabled = value; return builder; } };

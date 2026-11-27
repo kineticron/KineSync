@@ -19,8 +19,9 @@ const chain = { duration: () => chain, reduceMotion: () => chain };
 const animated = { View: 'View', Text: 'Text', Easing: { bezier: () => null, linear: null }, FadeIn: chain, ReduceMotion: { System: 'system' },
   useAnimatedReaction: () => {}, useAnimatedRef: () => ({}), useAnimatedStyle: () => ({}), useReducedMotion: () => false,
   useSharedValue: x => ({ get: () => x, set: () => {} }) };
-const react = { memo: f => f, useEffect: () => {}, useState: () => [expanded, x => { expanded = x; }] };
+const react = { memo: f => f, forwardRef: f => f, useEffect: () => {}, useState: () => [expanded, x => { expanded = x; }] };
 const imports = { react, 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'Fragment' }, 'react-native': native,
+  'react-native-gesture-handler': { Touchable: 'Pressable', ScrollView: 'ScrollView', GestureHandlerRootView: 'View' },
   'react-native-reanimated': { ...animated, default: animated }, 'expo-blur': { BlurView: 'Blur' }, 'expo-image': { Image: 'Image' },
   'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) } };
 const mod = { exports: {} };

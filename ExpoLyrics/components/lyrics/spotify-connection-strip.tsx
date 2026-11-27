@@ -1,11 +1,12 @@
 import { memo } from 'react';
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePlaybackStore } from '@/store/playback-store';
 import { usePlayerTourStore } from '@/store/player-tour-store';
 import { useSpotifyConnectionStore } from '@/store/spotify-connection-store';
 import { spotifyHealthMessage } from '@/lib/spotify-detector/health';
 import { requestOpenSpotifyBrowser, requestReloadSpotifyBrowser } from '@/lib/spotify-player-actions';
+import { NativeTouchable } from '@/components/ui/native-touchable';
 
 /** Independent of lyrics, artwork, renderer readiness and the bootstrap browser. */
 export const SpotifyConnectionStrip = memo(function SpotifyConnectionStrip() {
@@ -22,13 +23,13 @@ export const SpotifyConnectionStrip = memo(function SpotifyConnectionStrip() {
   const retry = h.phase === 'retryWait';
   return <View style={[styles.strip, { top: insets.top + 4 }]}>
     <Text accessibilityLiveRegion="polite" style={styles.message}>{spotifyHealthMessage(h)}{h.phase !== 'ready' || h.target === 'absent' ? ' · Last known playback' : ''}</Text>
-    {(signIn || openDevice || retry) && <Pressable accessibilityRole="button"
+    {(signIn || openDevice || retry) && <NativeTouchable accessibilityRole="button"
       accessibilityLabel={openDevice ? 'Open Spotify' : signIn ? 'Review Spotify sign-in' : 'Retry Spotify connection'}
       hitSlop={8} onPress={() => {
         if (openDevice) { void Linking.openURL('spotify://').catch(() => {}); }
         else if (signIn) requestOpenSpotifyBrowser();
         else requestReloadSpotifyBrowser();
-      }}><Text style={styles.action}>{openDevice ? 'Open Spotify' : signIn ? 'Sign in' : 'Retry now'}</Text></Pressable>}
+      }}><Text style={styles.action}>{openDevice ? 'Open Spotify' : signIn ? 'Sign in' : 'Retry now'}</Text></NativeTouchable>}
   </View>;
 });
 const styles = StyleSheet.create({

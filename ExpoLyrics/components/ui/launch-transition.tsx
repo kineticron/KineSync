@@ -1,12 +1,13 @@
 import { reloadAppAsync } from 'expo';
 import * as SplashScreen from 'expo-splash-screen';
 import { useCallback, useEffect, useRef, useState, type PropsWithChildren } from 'react';
-import { Alert, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Alert, Platform, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Animated, {
   cancelAnimation, Easing, Extrapolation, interpolate, runOnJS,
   useAnimatedStyle, useReducedMotion, useSharedValue, withTiming, withSpring, withDelay, withSequence,
 } from 'react-native-reanimated';
 
+import { NativeTouchable } from '@/components/ui/native-touchable';
 import { Design, Motion } from '@/constants/design';
 import { LaunchVisibilityContext } from './launch-visibility';
 
@@ -308,13 +309,13 @@ export function LaunchTransition({ ready, children }: PropsWithChildren<{ ready:
             {finished ? 'Setup is taking longer than expected.' : 'Restoring setup…'}
           </Text>
           {android && finished && (
-            <Pressable accessibilityRole="button" style={styles.retryButton} onPress={() => {
+            <NativeTouchable accessibilityRole="button" style={styles.retryButton} onPress={() => {
               void reloadAppAsync('Retry setup restore').catch(() => {
                 Alert.alert('Could not retry setup', 'Close and reopen KineSync to try again.');
               });
             }}>
               <Text style={styles.retryLabel}>Retry setup</Text>
-            </Pressable>
+            </NativeTouchable>
           )}
         </View>
       )}

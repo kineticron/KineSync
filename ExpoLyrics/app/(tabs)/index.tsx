@@ -6,6 +6,7 @@ import { SpotifyConnectionStrip } from '@/components/lyrics/spotify-connection-s
 import { BlurView } from "expo-blur";
 import { Asset } from "expo-asset";
 import { LyricsTypeIcon } from "@/components/lyrics/lyrics-type-icon";
+import { NativeTouchable } from "@/components/ui/native-touchable";
 import { LinearGradient } from "expo-linear-gradient";
 import * as FileSystem from "expo-file-system/legacy";
 import { useKeepAwake } from "expo-keep-awake";
@@ -27,6 +28,7 @@ import {
   Alert,
   AppState,
   Platform,
+  // eslint-disable-next-line @typescript-eslint/no-restricted-imports -- RN Pressable owns full-screen responder blockers and the reveal zone in this screen
   Pressable,
   Share,
   StyleSheet,
@@ -1698,7 +1700,8 @@ export default function HomeScreen() {
                       tint="light"
                       style={styles.fullscreenAlbumIconCapsule}
                     >
-                      <Pressable
+                      <NativeTouchable
+                        accessibilityRole="button"
                         accessibilityLabel="Open player menu"
                         style={({ pressed }) => [
                           styles.fullscreenAlbumIconButton,
@@ -1717,7 +1720,7 @@ export default function HomeScreen() {
                           size={18}
                           color="#F9FAFC"
                         />
-                      </Pressable>
+                      </NativeTouchable>
                     </BlurView>
                   </Reanimated.View>
                 </View>
@@ -1873,15 +1876,15 @@ export default function HomeScreen() {
             onUserInteraction={handleControlsInteraction}
             fullscreenActions={
               <>
-                <Pressable accessibilityRole="button" accessibilityLabel="Open local vault" disabled={tour.active} hitSlop={8} style={({ pressed }) => [styles.fullscreenBottomButton, pressed && styles.fullscreenBottomButtonPressed]} onPress={() => router.push("/(tabs)/vault")}>
+                <NativeTouchable accessibilityRole="button" accessibilityLabel="Open local vault" disabled={tour.active} hitSlop={8} style={({ pressed }) => [styles.fullscreenBottomButton, pressed && styles.fullscreenBottomButtonPressed]} onPress={() => router.push("/(tabs)/vault")}>
                   <Ionicons name="library-outline" size={20} color="#FFFFFF" />
-                </Pressable>
-                <Pressable accessibilityRole="button" accessibilityLabel="Show lyrics" hitSlop={8} style={({ pressed }) => [styles.fullscreenBottomButton, tour.active && tour.step === 'lyrics' && styles.tourHighlight, pressed && styles.fullscreenBottomButtonPressed]} onPress={handleShowLyrics}>
+                </NativeTouchable>
+                <NativeTouchable accessibilityRole="button" accessibilityLabel="Show lyrics" hitSlop={8} style={({ pressed }) => [styles.fullscreenBottomButton, tour.active && tour.step === 'lyrics' && styles.tourHighlight, pressed && styles.fullscreenBottomButtonPressed]} onPress={handleShowLyrics}>
                   <LyricsTypeIcon mode={lyricsTimingMode === "unknown" ? "interpolated" : lyricsTimingMode} size={17} color="#FFFFFF" />
-                </Pressable>
-                <Pressable accessibilityRole="button" accessibilityLabel="Open settings" disabled={tour.active} hitSlop={8} style={({ pressed }) => [styles.fullscreenBottomButton, pressed && styles.fullscreenBottomButtonPressed]} onPress={() => router.push("/(tabs)/explore")}>
+                </NativeTouchable>
+                <NativeTouchable accessibilityRole="button" accessibilityLabel="Open settings" disabled={tour.active} hitSlop={8} style={({ pressed }) => [styles.fullscreenBottomButton, pressed && styles.fullscreenBottomButtonPressed]} onPress={() => router.push("/(tabs)/explore")}>
                   <Ionicons name="settings-outline" size={20} color="#FFFFFF" />
-                </Pressable>
+                </NativeTouchable>
               </>
             }
             fullscreenAlbumMode={fullscreenAlbumMode}

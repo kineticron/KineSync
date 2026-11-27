@@ -14,6 +14,7 @@ const mocks = {
   react: { memo: fn => fn }, 'react/jsx-runtime': require('react/jsx-runtime'),
   'react-native': { View: 'View', Text: 'Text', Pressable: 'Pressable', Linking: { openURL: async url => actions.push(url) }, StyleSheet: { create: s => s } },
   'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 10 }) },
+  '@/components/ui/native-touchable': { NativeTouchable: 'Pressable' },
   '@/store/playback-store': { usePlaybackStore: selector => selector(playback) },
   '@/store/player-tour-store': { usePlayerTourStore: selector => selector(tour) },
   '@/store/spotify-connection-store': { useSpotifyConnectionStore: selector => selector({ health }) },

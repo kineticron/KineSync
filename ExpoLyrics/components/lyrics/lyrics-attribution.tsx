@@ -1,9 +1,10 @@
 import { BlurView } from 'expo-blur';
 import { Image } from 'expo-image';
 import { memo, useEffect, useState } from 'react';
-import { Linking, Pressable, StyleSheet, Text, View, useWindowDimensions, type ViewStyle } from 'react-native';
+import { Linking, StyleSheet, Text, View, useWindowDimensions, type ViewStyle } from 'react-native';
 import Animated, { cancelAnimation, Easing, measure, useAnimatedReaction, useAnimatedRef, useAnimatedStyle, useReducedMotion, useSharedValue, withTiming, type AnimatedStyle, type SharedValue } from 'react-native-reanimated';
 import { LyricsDialogAction, LyricsDialogTitle, LyricsGlassDialog } from '@/components/lyrics/lyrics-glass-dialog';
+import { NativeTouchable } from '@/components/ui/native-touchable';
 import { isSpicyLyricsResponse } from '@/lib/lyrics-policy';
 import type { LyricsMetadata, LyricsAttributionMetadata, LyricsAttributionProfile } from '@/types/bridge';
 
@@ -124,7 +125,7 @@ export const LyricsAttribution = memo(function LyricsAttribution({ metadata, isS
   return <>
     <View pointerEvents="box-none" style={[styles.anchor, { bottom: bottomInset + 10 }]}>
       <Animated.View ref={badgeRef} collapsable={false} style={[styles.motion, positionStyle]}>
-        <Pressable accessibilityRole="button" accessibilityLabel="Lyrics attribution. Show details" accessibilityState={{ expanded }}
+        <NativeTouchable accessibilityRole="button" accessibilityLabel="Lyrics attribution. Show details" accessibilityState={{ expanded }}
           hitSlop={8} onPress={() => { onInteraction(); setExpanded(true); }} style={styles.badge}>
           <Animated.View pointerEvents="none" style={[styles.glass, glassStyle]}>
             <BlurView intensity={28} tint="dark" style={StyleSheet.absoluteFill} />
@@ -134,7 +135,7 @@ export const LyricsAttribution = memo(function LyricsAttribution({ metadata, isS
             <Profile label="U:" profile={attribution.uploader} avatarStyle={glassStyle} />
             <Profile label="M:" profile={attribution.maker} avatarStyle={glassStyle} />
           </> : <Text style={styles.credit}>{attribution.provider || (allCredits ? 'Song credits' : 'Unknown')}</Text>}
-        </Pressable>
+        </NativeTouchable>
       </Animated.View>
     </View>
     <LyricsGlassDialog visible={expanded} onClose={() => setExpanded(false)} closeLabel="Close lyrics attribution">

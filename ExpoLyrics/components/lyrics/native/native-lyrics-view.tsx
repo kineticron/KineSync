@@ -7,6 +7,7 @@ import { NativeSharedBlur, NativeSharedBlurContext, NativeBlurGeometryContext, h
 import { LyricsArrivalContext, LyricsArrivalCommit, useArrivalIdentity, useArrivalGeometry } from '@/lib/lyrics-arrival-context';
 import { arrivalSpan, arrivalEvent } from '@/lib/lyrics-arrival-trace';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+// eslint-disable-next-line @typescript-eslint/no-restricted-imports -- RN FlatList is the intentional A/B fallback and the nested footer keeps RN responder semantics
 import { Platform, AppState, FlatList, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
@@ -521,6 +522,9 @@ export const NativeLyricsView = withLyricsPacketTransition(memo(function NativeL
     }
   }, [refreshBlurGeometry, markRendererReady, rendererReadyKey, scrollTo, transition]);
   if (!lyrics.length) return <View style={styles.empty} onLayout={transition?.onReady}><Text style={styles.title}>{metadata.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet'}</Text><Text style={styles.credits}>{status || `Source: ${source || 'unavailable'}`}</Text></View>;
+  // The RN FlatList branch is the deliberate A/B fallback. It keeps RN's
+  // scrollToIndex failure recovery, direct touch cancellation, and the nested
+  // RN footer press target, so it must not be swapped for a GH scroller here.
   const content = <NativeLyricsFontContext.Provider key={simpleScroll ? `${scrollSourceKey}:simple-scroll` : 'baseline-motion'} value={fonts}><ReferenceScrollContext.Provider value={referenceScroll}>{list === 'flash'
       ? <FlashList ref={flashRef} data={rows} renderItem={renderItem} keyExtractor={keyExtractor} getItemType={getItemType}
           CellRendererComponent={style === 'amll' && !staticLyrics ? AmllLayoutCell : undefined}

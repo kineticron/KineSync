@@ -1,7 +1,7 @@
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { BlurView } from "expo-blur";
 import { memo } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { Image } from "expo-image";
 import Reanimated, {
   interpolate,
@@ -10,6 +10,7 @@ import Reanimated, {
 } from "react-native-reanimated";
 
 import { BridgedArtworkImage } from "@/components/lyrics/bridged-artwork-image";
+import { NativeTouchable } from "@/components/ui/native-touchable";
 import { LyricsTypeIconButton } from "@/components/lyrics/lyrics-type-icon-button";
 import { MarqueeText } from "@/components/ui/marquee-text";
 import {
@@ -61,7 +62,7 @@ export const TopBar = memo(function TopBar({
 
   return (
     <View style={styles.container}>
-      <Pressable
+      <NativeTouchable
         accessibilityRole={onTrackPress ? 'button' : undefined}
         accessibilityLabel={onTrackPress ? `${title}, ${artist}. Show album artwork` : `${title}, ${artist}`}
         style={({ pressed }) => [
@@ -95,7 +96,7 @@ export const TopBar = memo(function TopBar({
             <MarqueeText style={styles.artist}>{artist}</MarqueeText>
           </>}
         </View>
-      </Pressable>
+      </NativeTouchable>
 
       <View style={styles.actionRow}>
         {lyricsTimingMode !== "unknown" ? (
@@ -109,7 +110,7 @@ export const TopBar = memo(function TopBar({
 
         <Reanimated.View style={menuAnimatedStyle}>
           <BlurView intensity={34} tint="light" style={styles.iconCapsule}>
-            <Pressable
+            <NativeTouchable
               accessibilityRole="button"
               accessibilityLabel="Open player menu"
               hitSlop={5}
@@ -125,7 +126,7 @@ export const TopBar = memo(function TopBar({
               }}
               onPress={onMenuPress}>
               <Ionicons name="ellipsis-horizontal" size={17} color="#F9FAFC" />
-            </Pressable>
+            </NativeTouchable>
           </BlurView>
         </Reanimated.View>
       </View>

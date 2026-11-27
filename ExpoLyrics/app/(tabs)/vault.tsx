@@ -6,6 +6,7 @@ import { BlurView } from 'expo-blur';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
+import { ScrollView } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MotionPressable as Button } from '@/components/ui/motion-pressable';
 import { PromotionalBackdrop } from '@/components/ui/promotional-backdrop';
@@ -181,6 +182,7 @@ export default function VaultScreen() {
     <SafeAreaView style={styles.safeArea}>
       <KeyboardAvoidingView style={styles.safeArea} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <FlashList data={filteredEntries} renderItem={renderEntry} keyExtractor={vaultKey}
+        renderScrollComponent={ScrollView}
         drawDistance={420}
         contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}
         ItemSeparatorComponent={VaultSeparator}

@@ -10,13 +10,13 @@ import {
   KeyboardAvoidingView,
   Modal,
   Platform,
-  ScrollView,
   StyleSheet,
   Switch,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { GestureHandlerRootView, ScrollView } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { bridgeClient } from '@/lib/bridge-client';
@@ -804,7 +804,7 @@ export default function BridgeSettingsScreen() {
         animationType="slide"
         visible={scannerOpen}
         onRequestClose={() => setScannerOpen(false)}>
-        <View style={styles.scannerModal}>
+        <GestureHandlerRootView style={styles.scannerModal}>
           <CameraView style={styles.scannerCamera} onBarcodeScanned={handleBarcodeScanned} />
           <View style={styles.scannerOverlay}>
             <View style={styles.scannerFrame} />
@@ -819,7 +819,7 @@ export default function BridgeSettingsScreen() {
               <Text style={styles.secondaryButtonText}>Cancel</Text>
             </Pressable>
           </View>
-        </View>
+        </GestureHandlerRootView>
       </Modal>
 
       <SpotifyLoginModal

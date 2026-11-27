@@ -142,6 +142,7 @@ function launchHarness({ os = 'android', reduceMotion = false, width = 390, heig
       cancelAnimation: () => { calls.cancel++; },
       runOnJS: callback => callback,
     },
+    '@/components/ui/native-touchable': { NativeTouchable: 'NativeTouchable' },
     '@/constants/design': { Design: { background: '#090C13' }, Motion: {} },
     './launch-visibility': { LaunchVisibilityContext: { Provider: 'VisibilityProvider' } },
   }, {

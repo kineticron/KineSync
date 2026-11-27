@@ -1,7 +1,9 @@
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { BlurView } from 'expo-blur';
-import { useEffect, useRef, useState } from 'react';
-import { Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useRef, useState, type ComponentRef } from 'react';
+// eslint-disable-next-line @typescript-eslint/no-restricted-imports -- Pressable is a pointer-only backdrop with no visual feedback and no nested content
+import { Keyboard, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { GestureHandlerRootView, ScrollView } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useReducedMotion } from 'react-native-reanimated';
 
@@ -21,7 +23,7 @@ export function TranslationLanguagePicker({ open, selected, onSelect, onClose }:
   const [search, setSearch] = useState('');
   const [focused, setFocused] = useState(false);
   const input = useRef<TextInput>(null);
-  const list = useRef<ScrollView>(null);
+  const list = useRef<ComponentRef<typeof ScrollView>>(null);
   useEffect(() => {
     if (open) {
       setSearch('');
@@ -55,6 +57,7 @@ export function TranslationLanguagePicker({ open, selected, onSelect, onClose }:
     <Modal visible={open} transparent animationType={reduceMotion ? 'none' : 'fade'} statusBarTranslucent
       supportedOrientations={_stableSupportedOrientations1}
       onRequestClose={close}>
+      <GestureHandlerRootView style={styles.root}>
       <View style={styles.overlay}>
         <Pressable style={StyleSheet.absoluteFill} onPress={close} accessible={false} />
         <SafeAreaView style={styles.safeArea} edges={_stableEdges2} pointerEvents="box-none">
@@ -109,11 +112,13 @@ export function TranslationLanguagePicker({ open, selected, onSelect, onClose }:
           </KeyboardAvoidingView>
         </SafeAreaView>
       </View>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1 },
   overlay: { flex: 1, backgroundColor: 'rgba(3,4,10,0.34)' },
   safeArea: { flex: 1 },
   positioner: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 16 },

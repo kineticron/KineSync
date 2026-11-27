@@ -1,8 +1,12 @@
 import { BlurView } from 'expo-blur';
 import { type ReactNode } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+// eslint-disable-next-line @typescript-eslint/no-restricted-imports -- Pressable is a pointer-only backdrop with no visual feedback and no nested content
+import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { GestureHandlerRootView, ScrollView } from 'react-native-gesture-handler';
 import Animated, { FadeIn, ReduceMotion } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { NativeTouchable } from '@/components/ui/native-touchable';
 
 type Props = {
   visible: boolean;
@@ -17,17 +21,32 @@ export function LyricsGlassDialog({ visible, onClose, closeLabel, children }: Pr
   return <Modal transparent visible={visible} animationType="fade" statusBarTranslucent
     supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}
     onRequestClose={onClose}>
-    <Pressable accessibilityLabel={closeLabel} style={[dialogStyles.scrim, {
-      paddingTop: Math.max(24, insets.top), paddingBottom: Math.max(24, insets.bottom),
-      paddingLeft: Math.max(24, insets.left), paddingRight: Math.max(24, insets.right),
-    }]} onPress={onClose}>
-      <Animated.View entering={FadeIn.duration(200).reduceMotion(ReduceMotion.System)} style={dialogStyles.dialog}>
-        <Pressable style={dialogStyles.dialogBody} onPress={event => event.stopPropagation()} accessibilityViewIsModal onAccessibilityEscape={onClose}>
-          <BlurView intensity={48} tint="dark" style={StyleSheet.absoluteFill} />
-          <ScrollView style={dialogStyles.detailsScroll} contentContainerStyle={dialogStyles.details}>{children}</ScrollView>
-        </Pressable>
-      </Animated.View>
-    </Pressable>
+    <GestureHandlerRootView style={dialogStyles.root}>
+      {/* Android does not hide modal siblings from accessibility, so the
+          backdrop remains a labeled close button there. iOS hides it behind
+          accessibilityViewIsModal and keeps Done and the escape action. */}
+      <Pressable
+        accessible
+        accessibilityRole="button"
+        accessibilityLabel={closeLabel}
+        style={[StyleSheet.absoluteFill, dialogStyles.backdrop, {
+          paddingTop: Math.max(24, insets.top), paddingBottom: Math.max(24, insets.bottom),
+          paddingLeft: Math.max(24, insets.left), paddingRight: Math.max(24, insets.right),
+        }]}
+        onPress={onClose}
+      />
+      <View pointerEvents="box-none" style={[dialogStyles.scrim, {
+        paddingTop: Math.max(24, insets.top), paddingBottom: Math.max(24, insets.bottom),
+        paddingLeft: Math.max(24, insets.left), paddingRight: Math.max(24, insets.right),
+      }]}>
+        <Animated.View entering={FadeIn.duration(200).reduceMotion(ReduceMotion.System)} style={dialogStyles.dialog}>
+          <View style={dialogStyles.dialogBody} accessibilityViewIsModal onAccessibilityEscape={onClose}>
+            <BlurView intensity={48} tint="dark" style={StyleSheet.absoluteFill} />
+            <ScrollView style={dialogStyles.detailsScroll} contentContainerStyle={dialogStyles.details}>{children}</ScrollView>
+          </View>
+        </Animated.View>
+      </View>
+    </GestureHandlerRootView>
   </Modal>;
 }
 
@@ -36,13 +55,15 @@ export function LyricsDialogTitle({ children }: { children: ReactNode }) {
 }
 
 export function LyricsDialogAction({ label, onPress, disabled = false }: { label: string; onPress: () => void; disabled?: boolean }) {
-  return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[dialogStyles.close, disabled && dialogStyles.disabled]}>
+  return <NativeTouchable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[dialogStyles.close, disabled && dialogStyles.disabled]}>
     <Text style={dialogStyles.closeText}>{label}</Text>
-  </Pressable>;
+  </NativeTouchable>;
 }
 
 export const dialogStyles = StyleSheet.create({
-  scrim: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: 'rgba(0,0,0,0.25)' },
+  root: { flex: 1 },
+  backdrop: { backgroundColor: 'rgba(0,0,0,0.25)' },
+  scrim: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   dialog: { width: '100%', maxWidth: 380, maxHeight: '80%', borderRadius: 24, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.2)', backgroundColor: 'rgba(24,24,30,0.18)' },
   dialogBody: { flexShrink: 1 },
   detailsScroll: { flexShrink: 1 },

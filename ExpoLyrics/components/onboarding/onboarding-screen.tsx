@@ -14,13 +14,12 @@ import {
   NativeScrollEvent,
   NativeSyntheticEvent,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
   View,
   useWindowDimensions,
 } from "react-native";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { GestureHandlerRootView, ScrollView as GestureScrollView } from "react-native-gesture-handler";
 import Reanimated, {
   Extrapolation,
   interpolate,
@@ -55,6 +54,8 @@ import { requestReloadSpotifyBrowser } from "@/components/lyrics/spotify-browser
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { MotionPressable as Pressable } from "@/components/ui/motion-pressable";
 import { Design } from "@/constants/design";
+
+const AnimatedGestureScrollView = Reanimated.createAnimatedComponent(GestureScrollView);
 
 function inferDefaultBridgeUrl() {
   const configuredBridgeUrl =
@@ -190,7 +191,7 @@ function StepPage({
   }, [index, itemWidth]);
 
   return (
-    <ScrollView
+    <GestureScrollView
       style={{ width: itemWidth }}
       aria-hidden={!active}
       accessibilityElementsHidden={!active}
@@ -210,7 +211,7 @@ function StepPage({
       <Reanimated.View style={[styles.pageInner, landscape && styles.pageInnerLandscape, animatedStyle]}>
         {children}
       </Reanimated.View>
-    </ScrollView>
+    </GestureScrollView>
   );
 }
 
@@ -482,7 +483,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
       <View style={styles.container}>
         <SetupBackground />
 
-        <Reanimated.ScrollView
+        <AnimatedGestureScrollView
           ref={scrollRef}
           horizontal
           pagingEnabled
@@ -691,7 +692,7 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
               </View>
             </StepPage>
           ))}
-        </Reanimated.ScrollView>
+        </AnimatedGestureScrollView>
 
         <View style={[styles.footer, { paddingBottom: insets.bottom + (landscape ? 10 : 16), paddingLeft: insets.left + 22, paddingRight: insets.right + 22 }]}>
           <LinearGradient

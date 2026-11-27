@@ -1,5 +1,6 @@
 import { useFocusEffect } from "expo-router";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+// eslint-disable-next-line @typescript-eslint/no-restricted-imports -- Non-interactive ScrollView is used only to measure content width
 import { Animated, AppState, Easing, ScrollView, StyleSheet, Text, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
 import { useReducedMotion } from "react-native-reanimated";
 

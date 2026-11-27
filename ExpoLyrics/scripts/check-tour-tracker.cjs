@@ -21,6 +21,7 @@ const React = require('react');
     'react-native': { View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView: 'ScrollView', ActivityIndicator: 'Spinner', Platform: { OS: 'android', select: options => options.android ?? options.default },
       StyleSheet: { create: value => value, absoluteFill: {} }, AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } },
     'react-native-webview': { WebView: 'WebView' }, 'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
+    'react-native-gesture-handler': { ScrollView: 'ScrollView' }, '@/components/ui/native-touchable': { NativeTouchable: 'NativeTouchable' },
     '@react-native-vector-icons/ionicons': { __esModule: true, default: 'Icon' }, 'expo-router': { router: { push() {} } },
     '@/store/player-tour-store': { usePlayerTourStore: Object.assign(selector => selector ? selector(tour) : tour, { getState: () => tour }) },
     '@/store/spotify-session-store': { useSpotifySessionStore: { getState: () => ({ signedIn: true, loggedOut: false }) } },
@@ -79,7 +80,7 @@ const React = require('react');
   Object.assign(mocks['expo-router'], { Stack });
   mocks['expo-router/react-navigation'] = { DarkTheme: { colors: {} }, ThemeProvider: 'ThemeProvider' };
   mocks['expo-status-bar'] = { StatusBar: 'StatusBar' };
-  mocks['react-native-gesture-handler'] = { GestureHandlerRootView: 'GestureRoot' };
+  mocks['react-native-gesture-handler'] = { GestureHandlerRootView: 'GestureRoot', ScrollView: 'ScrollView' };
   mocks['react-native-reanimated'] = { useReducedMotion: () => false };
   mocks['react-native-safe-area-context'].SafeAreaProvider = 'SafeAreaProvider';
   mocks['@/providers/bridge-provider'] = { BridgeProvider: 'BridgeProvider' };

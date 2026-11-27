@@ -292,6 +292,7 @@ async function checkVault() {
   const clearSharedPayloads = () => {};
   const { default: VaultScreen } = load('app/(tabs)/vault.tsx', { ...h.mocks,
     '@shopify/flash-list': { FlashList: 'FlashList' },
+    'react-native-gesture-handler': { ScrollView: 'GestureScrollView' },
     '@react-native-vector-icons/ionicons': 'Icon', 'expo-file-system': {}, 'expo-sharing': {}, 'expo-blur': { BlurView: 'BlurView' },
     'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' }, '@/components/ui/motion-pressable': { MotionPressable: 'Button' },
     '@/components/ui/promotional-backdrop': { PromotionalBackdrop: 'Backdrop' }, '@/components/lyrics/bridged-artwork-image': { BridgedArtworkImage: 'Artwork' },
@@ -325,7 +326,7 @@ function checkClosedMenu() {
     get driftOffset() { reads++; return 42; } };
   const { SettingsMenu } = load('components/lyrics/settings-menu.tsx', { ...h.mocks,
     '@react-native-vector-icons/ionicons': 'Icon', 'expo-blur': { BlurView: 'BlurView' },
-    'react-native-gesture-handler': { GestureHandlerRootView: 'Root' },
+    'react-native-gesture-handler': { GestureHandlerRootView: 'Root', ScrollView: 'GestureScrollView' },
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) },
     '@/lib/scanner-session': load('lib/scanner-session.ts', {}, h.globals),
     '@/lib/lyrics-timing': { getLyricsTimingLabel: () => 'Line' }, '@/lib/network': {}, '@/lib/bridge-settings': {}, '@/lib/bridge-client': {},

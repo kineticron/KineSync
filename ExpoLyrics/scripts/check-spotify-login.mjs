@@ -68,6 +68,7 @@ const modules = {
   'react/jsx-runtime': jsxRuntime,
   'react-native': { Platform: { OS: 'ios' }, View: 'View', Text: 'Text', Pressable: 'Pressable', StyleSheet: { create: value => value } },
   'react-native-webview': { WebView: 'WebView' },
+  '@/components/ui/native-touchable': { NativeTouchable: 'Pressable' },
   '@/lib/spotify-browser': { isAllowedSpotifyLoginNavigation: loginAllowed, isTrustedSpotifyWebViewMessageUrl: trusted, spotifyAuthProbeScript, SPOTIFY_WEBVIEW_ORIGIN_WHITELIST: ['https://*'] },
 };
 const { SpotifyLoginWebView } = loadComponent('components/spotify-login-webview.tsx', modules);

@@ -1,9 +1,10 @@
 import { BlurView } from "expo-blur";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import Reanimated, { FadeIn, FadeOut } from "react-native-reanimated";
 
 import { LyricsTypeIcon } from "@/components/lyrics/lyrics-type-icon";
+import { NativeTouchable } from "@/components/ui/native-touchable";
 import { formatLyricsSourceLabel } from "@/lib/format-lyrics-source";
 import type { LyricsTimingMode } from "@/lib/lyrics-timing";
 
@@ -58,7 +59,7 @@ export const LyricsTypeIconButton = memo(function LyricsTypeIconButton({
 
   return (
     <View style={styles.wrap}>
-      <Pressable
+      <NativeTouchable
         accessibilityLabel={
           lyricsTimingModeLabel(mode) +
           `. Source: ${sourceLabel}. Tap to ${tooltipVisible ? "hide" : "show"} source.`
@@ -72,7 +73,7 @@ export const LyricsTypeIconButton = memo(function LyricsTypeIconButton({
         onPress={toggleTooltip}
       >
         <LyricsTypeIcon mode={mode} size={size} color={color} />
-      </Pressable>
+      </NativeTouchable>
 
       {tooltipVisible ? (
         <Reanimated.View

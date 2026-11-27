@@ -1,7 +1,8 @@
 import Ionicons from '@react-native-vector-icons/ionicons';
 import { BlurView } from 'expo-blur';
 import { memo } from 'react';
-import { ScrollView, StyleSheet, Text } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
+import { ScrollView } from 'react-native-gesture-handler';
 import Animated, { FadeInDown, ReduceMotion } from 'react-native-reanimated';
 
 import { MotionPressable } from '@/components/ui/motion-pressable';

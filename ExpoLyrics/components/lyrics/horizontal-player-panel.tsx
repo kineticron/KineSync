@@ -2,7 +2,7 @@ import Ionicons from "@react-native-vector-icons/ionicons";
 import { BlurView } from "expo-blur";
 import { Image } from 'expo-image';
 import { memo, useState, type ReactNode } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import Reanimated, {
   FadeIn,
   FadeOut,
@@ -12,6 +12,7 @@ import Reanimated, {
 } from "react-native-reanimated";
 
 import { AnimatedBridgedArtwork } from "@/components/lyrics/animated-bridged-artwork";
+import { NativeTouchable } from "@/components/ui/native-touchable";
 import { LyricsTypeIconButton } from "@/components/lyrics/lyrics-type-icon-button";
 import { MarqueeText } from "@/components/ui/marquee-text";
 import {
@@ -69,7 +70,7 @@ export const HorizontalPlayerPanel = memo(function HorizontalPlayerPanel({
 
   return (
     <View style={[styles.box, { width: artworkSize }]} onLayout={event => setPanelHeight(event.nativeEvent.layout.height)}>
-      <Pressable
+      <NativeTouchable
         style={[
           styles.artworkPressable,
           { width: coverSize, height: coverSize },
@@ -108,7 +109,7 @@ export const HorizontalPlayerPanel = memo(function HorizontalPlayerPanel({
             </View>
           </Reanimated.View>
         ) : null}
-      </Pressable>
+      </NativeTouchable>
 
       <View style={styles.metaSection} onLayout={event => setMetadataHeight(event.nativeEvent.layout.height)}>
         <MarqueeText style={styles.title}>{title}</MarqueeText>
@@ -131,7 +132,7 @@ export const HorizontalPlayerPanel = memo(function HorizontalPlayerPanel({
           <View style={styles.actionSlot}>
             <Reanimated.View style={menuAnimatedStyle}>
               <BlurView intensity={34} tint="light" style={styles.iconCapsule}>
-                <Pressable
+                <NativeTouchable
                   accessibilityRole="button"
                   hitSlop={5}
                   accessibilityLabel="Open player menu"
@@ -152,7 +153,7 @@ export const HorizontalPlayerPanel = memo(function HorizontalPlayerPanel({
                     size={17}
                     color="#F9FAFC"
                   />
-                </Pressable>
+                </NativeTouchable>
               </BlurView>
             </Reanimated.View>
           </View>

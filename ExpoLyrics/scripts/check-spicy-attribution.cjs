@@ -178,8 +178,17 @@ vm.runInNewContext(overlayCode, { exports: overlayModule.exports, require(name) 
     if (!previousOverlayDeps || deps.some((value, index) => value !== previousOverlayDeps[index])) callback();
     previousOverlayDeps = deps;
   }, useState: () => [expanded, value => { expanded = value; stateUpdates++; }] };
+  if (name === '@/components/ui/native-touchable') return {
+    NativeTouchable: props => jsx('Pressable', { ...props, children: props.children }),
+  };
   if (name === '@/components/lyrics/lyrics-glass-dialog') return {
-    LyricsGlassDialog: props => jsx('Modal', { ...props, transparent: true, visible: props.visible, animationType: 'fade', statusBarTranslucent: true, supportedOrientations: ['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right'], onRequestClose: props.onClose, children: jsx('Pressable', { accessibilityLabel: props.closeLabel, onPress: props.onClose, style: [{}, { paddingTop: Math.max(24, insets.top), paddingBottom: Math.max(24, insets.bottom), paddingLeft: Math.max(24, insets.left), paddingRight: Math.max(24, insets.right) }], children: jsx('View', { accessibilityViewIsModal: true, onAccessibilityEscape: props.onClose, onPress: event => event.stopPropagation(), style: { flexShrink: 1 }, children: jsx('ScrollView', { style: { flexShrink: 1 }, children: props.children }) }) }) }),
+    LyricsGlassDialog: props => {
+      const padding = { paddingTop: Math.max(24, insets.top), paddingBottom: Math.max(24, insets.bottom), paddingLeft: Math.max(24, insets.left), paddingRight: Math.max(24, insets.right) };
+      const backdrop = jsx('Pressable', { accessible: true, accessibilityRole: 'button', accessibilityLabel: props.closeLabel, onPress: props.onClose, style: [{}, {}, padding] });
+      const panel = jsx('View', { accessibilityViewIsModal: true, onAccessibilityEscape: props.onClose, style: { flexShrink: 1 }, children: jsx('ScrollView', { style: { flexShrink: 1 }, children: props.children }) });
+      const content = jsx('View', { pointerEvents: 'box-none', style: [{}, padding], children: jsx('View', { style: { flexShrink: 1 }, children: panel }) });
+      return jsx('Modal', { ...props, transparent: true, visible: props.visible, animationType: 'fade', statusBarTranslucent: true, supportedOrientations: ['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right'], onRequestClose: props.onClose, children: [backdrop, content] });
+    },
     LyricsDialogTitle: props => jsx('Text', props),
     LyricsDialogAction: props => jsx('Pressable', { ...props, accessibilityRole: 'button', children: jsx('Text', { children: props.label }) }),
     dialogStyles: { description: {}, title: {}, detailProvider: {}, close: {}, closeText: {}, disabled: {} },
@@ -289,7 +298,7 @@ for (const [width, height, left, right] of [[844, 390, 59, 0], [844, 390, 0, 59]
   assert.deepEqual(Array.from(modal.props.supportedOrientations || []), ['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']);
   assert.equal(modal.key, undefined);
   const scrim = nodes.find(node => node.props?.accessibilityLabel === 'Close lyrics attribution');
-  const padding = scrim.props.style[1];
+  const padding = scrim.props.style[2];
   for (const edge of ['Top', 'Bottom', 'Left', 'Right']) assert.equal(padding['padding' + edge], Math.max(24, insets[edge.toLowerCase()]));
   assert.equal(nodes.find(node => node.props?.accessibilityViewIsModal).props.style.flexShrink, 1);
   assert.equal(nodes.find(node => node.tag === 'ScrollView').props.style.flexShrink, 1, 'Short landscape constrains the scroll viewport, leaving Done reachable');
@@ -306,9 +315,13 @@ for (const dismiss of [
   assert.equal(expanded, false, 'Back, accessibility escape, scrim and Done dismiss details');
 }
 expanded = true;
-let stoppedInside = false;
-nodes.find(node => node.props?.accessibilityViewIsModal).props.onPress({ stopPropagation() { stoppedInside = true; } });
-assert.ok(stoppedInside, 'Inside taps do not dismiss the scrollable panel');
+const modal = nodes.find(node => node.tag === 'Modal');
+const panel = nodes.find(node => node.props?.accessibilityViewIsModal);
+const backdrop = nodes.find(node => node.props?.accessibilityLabel === 'Close lyrics attribution');
+assert.equal(panel.props.onPress, undefined, 'Panel is a plain View rather than a press target');
+assert.ok(modal.children.includes(backdrop), 'Backdrop is a sibling of the dialog content');
+assert.ok(!tree(backdrop).includes(panel), 'Backdrop does not wrap the scrollable panel');
+assert.equal(expanded, true, 'Inside taps do not dismiss the scrollable panel');
 
 const avatars = nodes.filter(node => node.tag === 'Image');
 assert.equal(avatars.length, 4, 'Both compact and expanded attribution include both profile pictures');
@@ -409,4 +422,46 @@ assert.ok(!playerStyles.properties.some(property => property.name.getText(player
 for (const name of ['controlsRevealZone', 'bottomArea', 'fillTouchBlocker']) {
   assert.ok(layerIndex('lyricsAttributionLayer') > layerIndex(name), `Attribution must receive taps above ${name}`);
 }
+// Load the real dialog shell so sibling backdrop and modal View behavior stay covered.
+const dialogModule = { exports: {} };
+const dialogCode = ts.transpileModule(read('components/lyrics/lyrics-glass-dialog.tsx'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2020 },
+}).outputText;
+let dialogClosed = 0;
+vm.runInNewContext(dialogCode, { exports: dialogModule.exports, require(name) {
+  if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'Fragment' };
+  if (name === 'react') return { memo: component => component };
+  if (name === 'expo-blur') return { BlurView: 'BlurView' };
+  if (name === 'react-native-safe-area-context') return { useSafeAreaInsets: () => insets };
+  if (name === 'react-native') return {
+    Modal: 'Modal', Pressable: 'Pressable', ScrollView: 'ScrollView', Text: 'Text', View: 'View',
+    StyleSheet: { create: styles => styles, absoluteFill: {}, absoluteFillObject: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }, hairlineWidth: 1 },
+  };
+  if (name === 'react-native-gesture-handler') return { GestureHandlerRootView: 'GestureHandlerRootView', ScrollView: 'GestureScrollView' };
+  if (name === 'react-native-reanimated') return { __esModule: true, default: { View: 'AnimatedView' }, FadeIn: { duration: () => ({ reduceMotion: () => 'fade' }) }, ReduceMotion: { System: 'system' } };
+  if (name === '@/components/ui/native-touchable') return { NativeTouchable: props => jsx('Pressable', { ...props, children: props.children }) };
+  throw Error('Unexpected dialog import ' + name);
+} });
+const dialogNodes = tree(dialogModule.exports.LyricsGlassDialog({ visible: true, onClose: () => { dialogClosed++; }, closeLabel: 'Close dialog', children: 'Body' }));
+const dialogModal = dialogNodes.find(node => node.tag === 'Modal');
+const dialogBackdrop = dialogNodes.find(node => node.props?.accessibilityLabel === 'Close dialog');
+const dialogPanel = dialogNodes.find(node => node.props?.accessibilityViewIsModal);
+const dialogRoot = dialogNodes.find(node => node.tag === 'GestureHandlerRootView');
+assert.ok(dialogRoot, 'Dialog content is rooted for native gestures');
+assert.equal(dialogModal.props.visible, true);
+assert.equal(dialogBackdrop.props.accessible, true, 'Backdrop remains an accessible close action');
+assert.equal(dialogBackdrop.props.accessibilityRole, 'button');
+assert.equal(dialogBackdrop.props.accessibilityLabel, 'Close dialog');
+assert.equal(dialogBackdrop.props.onPress, dialogModal.props.onRequestClose, 'Outside tap and back share the close handler');
+assert.ok(dialogRoot.children.includes(dialogBackdrop), 'Backdrop is a sibling of the dialog panel');
+assert.ok(!tree(dialogBackdrop).includes(dialogPanel), 'Backdrop does not wrap the dialog panel');
+assert.equal(dialogPanel.tag, 'View', 'The dialog body is not a press target');
+assert.equal(dialogPanel.props.onPress, undefined);
+dialogPanel.props.onAccessibilityEscape();
+assert.equal(dialogClosed, 1, 'Accessibility escape still closes');
+dialogBackdrop.props.onPress();
+assert.equal(dialogClosed, 2, 'Outside tap still closes');
+assert.ok(dialogNodes.some(node => node.tag === 'GestureScrollView'), 'Dialog details scroll under gesture handler');
+assert.equal(dialogNodes.find(node => node.tag === 'GestureScrollView').children, 'Body');
+
 console.log('Spicy contributor links, native accessibility, and TTML attribution checks passed.');

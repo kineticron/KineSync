@@ -1,4 +1,5 @@
 import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+// eslint-disable-next-line @typescript-eslint/no-restricted-imports -- Dev diagnostics overlay sits inside the Rust view's PanResponder ownership
 import { AppState, Linking, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type ViewProps } from 'react-native';
 import { requireNativeViewManager, requireOptionalNativeModule } from 'expo-modules-core';
 import { usePlaybackStore, type LyricsStyle } from '@/store/playback-store';

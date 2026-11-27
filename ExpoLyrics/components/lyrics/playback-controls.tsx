@@ -10,8 +10,9 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { Pressable, StyleSheet, View, TextInput, type ViewProps } from 'react-native';
+import { StyleSheet, View, TextInput, type ViewProps } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { NativeTouchable } from '@/components/ui/native-touchable';
 import Reanimated, {
   Easing,
   runOnJS,
@@ -213,7 +214,7 @@ function TransportButton({
   }));
 
   return (
-    <Pressable
+    <NativeTouchable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       disabled={disabled}
@@ -248,7 +249,7 @@ function TransportButton({
         {children}
         {pending ? <View pointerEvents="none" style={styles.transportPendingDot} /> : null}
       </Reanimated.View>
-    </Pressable>
+    </NativeTouchable>
   );
 }
 
@@ -367,7 +368,7 @@ export const PlaybackControls = memo(function PlaybackControls({
   const utilityButtons = (
     <>
       {!isLandscapeUtilities ? (
-        <Pressable
+        <NativeTouchable
           accessibilityRole="button"
           accessibilityLabel={autoHidePlaybackControls ? "Keep playback controls visible" : "Auto hide playback controls"}
           accessibilityState={{ selected: !autoHidePlaybackControls }}
@@ -392,10 +393,10 @@ onPressIn={onUserInteraction}
             />
 
           </View>
-        </Pressable>
+        </NativeTouchable>
       ) : null}
 
-      <Pressable
+      <NativeTouchable
         accessibilityRole="button"
         accessibilityLabel="Auto scroll to current lyric"
         accessibilityState={{ disabled: !showResumeAutoFollow }}
@@ -418,9 +419,9 @@ onPressIn={onUserInteraction}
           size={21}
           color={showResumeAutoFollow ? '#FFFFFF' : 'rgba(255,255,255,0.36)'}
         />
-      </Pressable>
+      </NativeTouchable>
 
-      <Pressable
+      <NativeTouchable
         accessibilityRole="button"
         accessibilityLabel={translationLoading ? "Translating lyrics" : translated ? "Lyrics translated" : "Translate lyrics"}
         accessibilityState={{ selected: translated, busy: translationLoading, disabled: translationLoading }}
@@ -449,7 +450,7 @@ onPressIn={onUserInteraction}
             </View>
           ) : null}
         </View>
-      </Pressable>
+      </NativeTouchable>
     </>
   );
 
@@ -457,7 +458,7 @@ onPressIn={onUserInteraction}
     return (
       <>
         <View style={styles.landscapeActionSlot}>
-          <Pressable
+          <NativeTouchable
             accessibilityRole="button"
             accessibilityLabel="Auto scroll to current lyric"
             accessibilityState={{ disabled: !showResumeAutoFollow }}
@@ -480,11 +481,11 @@ onPressIn={onUserInteraction}
               size={20}
               color={showResumeAutoFollow ? '#FFFFFF' : 'rgba(255,255,255,0.36)'}
             />
-          </Pressable>
+          </NativeTouchable>
         </View>
 
         <View style={styles.landscapeActionSlot}>
-          <Pressable
+          <NativeTouchable
             accessibilityRole="button"
             accessibilityLabel={translationLoading ? "Translating lyrics" : translated ? "Lyrics translated" : "Translate lyrics"}
             accessibilityState={{ selected: translated, busy: translationLoading, disabled: translationLoading }}
@@ -513,7 +514,7 @@ onPressIn={onUserInteraction}
                 </View>
               ) : null}
             </View>
-          </Pressable>
+          </NativeTouchable>
         </View>
       </>
     );

@@ -1,5 +1,5 @@
 import React, { createContext, forwardRef, useCallback, useContext, useEffect } from 'react';
-import { type ScrollView, type ScrollViewProps } from 'react-native';
+import type { ScrollView, ScrollViewProps } from 'react-native';
 import Animated, { cancelAnimation, scrollTo, useAnimatedReaction, useAnimatedRef, useAnimatedStyle,
   useFrameCallback, useScrollOffset, useSharedValue, withTiming, runOnUI, type SharedValue } from 'react-native-reanimated';
 import { advanceBatchedMotion, prepareBatchedRow, removeBatchedMotion, type BatchedMotion } from './batched-amll-motion';

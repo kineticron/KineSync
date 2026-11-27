@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 import { WebView, type WebViewProps } from 'react-native-webview';
 
 import {
@@ -8,6 +8,7 @@ import {
   spotifyAuthProbeScript,
   SPOTIFY_WEBVIEW_ORIGIN_WHITELIST,
 } from '@/lib/spotify-browser';
+import { NativeTouchable } from '@/components/ui/native-touchable';
 
 const LOGIN_URL = 'https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F';
 const PLAYER_URL = 'https://open.spotify.com/';
@@ -80,9 +81,9 @@ export function SpotifyLoginWebView({ onMessage }: Pick<WebViewProps, 'onMessage
         style={styles.container}
       />
       <View style={styles.error}>
-        <Pressable accessibilityRole="button" onPress={retry} style={styles.retry}>
+        <NativeTouchable accessibilityRole="button" onPress={retry} style={styles.retry}>
           <Text style={styles.message}>Retry sign-in</Text>
-        </Pressable>
+        </NativeTouchable>
       </View>
     </View>
   );

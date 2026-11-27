@@ -5,13 +5,12 @@ import { BlurView } from "expo-blur";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Modal,
-  ScrollView,
   StyleSheet,
   Text,
   useWindowDimensions,
   View,
 } from "react-native";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { GestureHandlerRootView, ScrollView } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { ComponentProps, ReactNode } from "react";
 import { getLyricsTimingLabel } from "@/lib/lyrics-timing";

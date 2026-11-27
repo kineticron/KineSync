@@ -1,4 +1,5 @@
 import { useMemo, useRef } from 'react';
+// eslint-disable-next-line @typescript-eslint/no-restricted-imports -- Touch start, move, end and cancel own the static renderer's reveal gesture
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { DRAG_SLOP, LONG_PRESS_MS } from '@/lib/rust-lyrics-gesture';
 import type { RustCredits } from '@/lib/rust-lyrics-protocol';
