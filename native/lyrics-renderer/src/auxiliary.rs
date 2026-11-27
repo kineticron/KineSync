@@ -401,6 +401,7 @@ enum Ink {
         gradient_box: (f64, f64),
         background: bool,
         words: Option<WordFill>,
+        settled: Option<Box<[Scene; 2]>>,
     },
 }
 
@@ -559,6 +560,7 @@ impl Translation {
                 gradient_box: (top, height + f64::from(p.bottom) - top),
                 background: p.background,
                 words,
+                settled: None,
             }
         } else {
             Ink::Amll {
@@ -571,7 +573,7 @@ impl Translation {
                 ),
             }
         };
-        Self {
+        let mut translation = Self {
             ink,
             origin,
             extra_height: f64::from(p.margin) + height + f64::from(p.bottom),
@@ -582,10 +584,69 @@ impl Translation {
             } else {
                 serde_json::Value::Null
             },
+        };
+        translation.prepare_settled(timed);
+        translation
+    }
+
+    fn prepare_settled(&mut self, source: Option<&PaintVoice>) {
+        let Ink::Spicy {
+            fallback, words, ..
+        } = &self.ink
+        else {
+            return;
+        };
+        if fallback.is_some()
+            || words
+                .as_ref()
+                .is_some_and(|words| words.pieces.iter().any(|piece| piece.fallback.is_some()))
+        {
+            return;
+        }
+
+        // Use the live painter at full settlement so the brushes, glyph order,
+        // and per-piece geometry are identical to the animated path.
+        let interval = (0.0, 1.0);
+        let scenes = [-1.0, interval.1 + TRANSITION_MS].map(|time| {
+            let mut scene = Scene::new();
+            self.draw_inner(
+                &mut scene,
+                Affine::IDENTITY,
+                1.0,
+                time,
+                interval,
+                false,
+                source.map(|voice| (voice, None)),
+            );
+            scene
+        });
+        self.reset_word_fill();
+        if let Ink::Spicy { settled, .. } = &mut self.ink {
+            *settled = Some(Box::new(scenes));
         }
     }
+
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
+        &self,
+        scene: &mut Scene,
+        transform: Affine,
+        amll_outer: f64,
+        time: f64,
+        interval: (f64, f64),
+        glow: bool,
+        source: Option<(&PaintVoice, Option<&crate::appearance::RowVoice>)>,
+    ) {
+        let transform = if matches!(&self.ink, Ink::Spicy { .. }) {
+            transform * self.origin
+        } else {
+            transform
+        };
+        self.draw_inner(scene, transform, amll_outer, time, interval, glow, source);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_inner(
         &self,
         scene: &mut Scene,
         transform: Affine,
@@ -614,8 +675,21 @@ impl Translation {
                 gradient_box,
                 background,
                 words,
+                settled,
             } => {
-                let transform = transform * self.origin;
+                let (start, end) = interval;
+                if let Some(scenes) = settled
+                    && (words.is_none() || source.is_some())
+                {
+                    let sung = time > end && time - end >= TRANSITION_MS && time >= start;
+                    if sung || time < start.min(end) {
+                        if let Some(words) = words {
+                            words.settle(time, sung);
+                        }
+                        scene.append(&scenes[usize::from(sung)], Some(transform));
+                        return;
+                    }
+                }
                 let (top, height) = *gradient_box;
                 let (opacity, active) = spicy_levels(time, interval);
                 let (dim, bright) = if *background {
@@ -755,6 +829,14 @@ impl WordInk {
 }
 
 impl WordFill {
+    fn settle(&self, time: f64, sung: bool) {
+        let mut history = self.history.lock().unwrap();
+        if time != history.time {
+            history.gradients.fill(if sung { 100.0 } else { -20.0 });
+            history.time = time;
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn draw(
         &self,
@@ -1580,11 +1662,15 @@ mod tests {
         use vello::peniko::{ImageAlphaType, ImageBrush, ImageData, ImageFormat};
 
         let Ink::Spicy {
-            fallback, words, ..
+            fallback,
+            words,
+            settled,
+            ..
         } = &mut t.ink
         else {
             panic!("expected a Spicy translation");
         };
+        *settled = None;
         let image = ImageBrush::new(ImageData {
             data: Blob::new(Arc::new([0, 255, 0, 255])),
             format: ImageFormat::Rgba8,
@@ -1601,6 +1687,277 @@ mod tests {
         fallback
             .get_or_insert_with(|| Box::new(Scene::new()))
             .draw_image(&image, Affine::translate((160.0, 2.0)) * Affine::scale(8.0));
+    }
+
+    #[test]
+    fn spicy_settled_scenes_match_live_paint_across_boundaries_and_seeks() {
+        let settings = Settings {
+            style: Style::Spicy,
+            font_scale: 1.0,
+            landscape: false,
+        };
+        let fixture = data();
+        let (mut track, fixture_time, _) = track(&fixture["packets"][0], true);
+        track.prepare(fixture_time).unwrap();
+        let source = track.lines()[0].voice(0).unwrap();
+        assert!(!source.words.is_empty());
+        let (start, end) = source.interval();
+        let middle = (start + end) * 0.5;
+        let partial = (1..999)
+            .map(|offset| start + f64::from(offset))
+            .find(|&time| {
+                time < end
+                    && source.words.iter().any(|word| {
+                        let gradient = source_gradient(word, None, time);
+                        gradient > -15.0 && gradient < 90.0
+                    })
+            })
+            .expect("fixture must begin revealing a word within one second");
+        let transform = Affine::translate((23.0, 47.0)) * Affine::scale(0.875);
+        let mut fonts = fonts();
+        // The subset covers lam and alef. Keep system fonts out of this case
+        // so the generic family cannot select a host-dependent Arabic face.
+        let mut rtl_fonts = Fonts::default();
+        rtl_fonts.context.collection =
+            parley::fontique::Collection::new(parley::fontique::CollectionOptions {
+                system_fonts: false,
+                ..Default::default()
+            });
+        let arabic_font = include_bytes!("../tests/fonts/arabic-ligature-subset.ttf");
+        let arabic_families = rtl_fonts
+            .context
+            .collection
+            .register_fonts(arabic_font.to_vec().into(), None);
+        assert!(!arabic_families.is_empty());
+        rtl_fonts.context.collection.set_generic_families(
+            parley::fontique::GenericFamily::SansSerif,
+            arabic_families.into_iter().map(|(family, _)| family),
+        );
+        let mut layouts = LayoutContext::new();
+        let mut rtl_layouts = LayoutContext::new();
+        let lam_alef = "لا";
+        let wrapped_rtl = lam_alef.repeat(24);
+        for (text, width, background, voice) in [
+            ("Outline subtitle", 350.0, false, None),
+            ("Outline subtitle", 350.0, true, None),
+            ("Outline subtitle", 350.0, false, Some(source)),
+            ("Outline subtitle", 350.0, true, Some(source)),
+            (wrapped_rtl.as_str(), 70.0, false, Some(source)),
+        ] {
+            let is_wrapped_rtl = text == wrapped_rtl.as_str();
+            let (test_fonts, test_layouts) = if is_wrapped_rtl {
+                (&mut rtl_fonts, &mut rtl_layouts)
+            } else {
+                (&mut fonts, &mut layouts)
+            };
+            let policy = Policy::voice(&settings, 1.0, background, 30.0, width);
+            let mut prepare = || {
+                Translation::prepare(
+                    text,
+                    &policy,
+                    true,
+                    20.0,
+                    test_fonts,
+                    test_layouts,
+                    is_wrapped_rtl,
+                    voice,
+                )
+            };
+            let cached = prepare();
+            let mut live = prepare();
+            let Ink::Spicy {
+                settled: Some(scenes),
+                ..
+            } = &cached.ink
+            else {
+                panic!("expected cached outline scenes for {text}");
+            };
+            let outlined = &scenes[0].encoding().resources;
+            let prefix_font = &outlined.glyph_runs[0].font;
+            let prefix_glyph = outlined.glyphs[0];
+            if is_wrapped_rtl {
+                assert_eq!(cached.missing_glyphs, 0);
+                assert!(cached.diagnostics["line_count"].as_u64().unwrap() > 1);
+                assert!(
+                    outlined
+                        .glyphs
+                        .iter()
+                        .any(|glyph| glyph.y != prefix_glyph.y)
+                );
+                for run in &outlined.glyph_runs {
+                    let face = FontRef::from_index(run.font.data.as_ref(), run.font.index).unwrap();
+                    let charmap = face.charmap();
+                    assert!(lam_alef.chars().all(|letter| charmap.map(letter).is_some()));
+                    let outlines = face.outline_glyphs();
+                    assert!(outlined.glyphs[run.glyphs.clone()].iter().all(|glyph| {
+                        glyph.id != 0 && outlines.get(GlyphId::new(glyph.id)).is_some()
+                    }));
+                }
+            }
+            let Ink::Spicy { settled, .. } = &mut live.ink else {
+                panic!("expected Spicy ink");
+            };
+            assert!(settled.take().is_some());
+
+            let mut appearance = AppearanceState::default();
+            for (frame, time) in [
+                start - 1.0,
+                partial,
+                start,
+                middle,
+                end,
+                end + TRANSITION_MS - 1.0,
+                end + TRANSITION_MS,
+                end + TRANSITION_MS,
+                end + TRANSITION_MS + 1.0,
+                middle,
+                start - 1.0,
+                start - 1.0,
+                partial,
+                start,
+                middle,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let native_ms = frame as f64 * 16.0;
+                appearance.prepare(&track, time, native_ms);
+                appearance.advance(
+                    &track,
+                    time,
+                    native_ms,
+                    true,
+                    crate::appearance::LIVE_EFFECT,
+                );
+                let row_words = &appearance.row(0).expect("missing fixture row").voices[0];
+                let draw = |translation: &Translation| {
+                    let mut scene = Scene::new();
+                    let clip = Rect::new(0.0, 0.0, 390.0, 640.0);
+                    scene.push_layer(Fill::NonZero, BlendMode::default(), 0.75, transform, &clip);
+                    scene
+                        .draw_glyphs(prefix_font)
+                        .font_size(12.0)
+                        .transform(Affine::translate((12.0, 100.0)))
+                        .brush(Color::WHITE)
+                        .draw(Fill::NonZero, [prefix_glyph].into_iter());
+                    translation.draw(
+                        &mut scene,
+                        transform,
+                        1.0,
+                        time,
+                        (start, end),
+                        true,
+                        voice.map(|voice| (voice, (frame % 2 == 0).then_some(row_words))),
+                    );
+                    scene.fill(Fill::EvenOdd, transform, Color::WHITE, None, &clip);
+                    scene.pop_layer();
+                    scene
+                };
+                let cached_frame = draw(&cached);
+                let live_frame = draw(&live);
+                if let (
+                    Ink::Spicy {
+                        words: Some(actual),
+                        ..
+                    },
+                    Ink::Spicy {
+                        words: Some(expected),
+                        ..
+                    },
+                ) = (&cached.ink, &live.ink)
+                {
+                    let actual = actual.history.lock().unwrap();
+                    let expected = expected.history.lock().unwrap();
+                    assert_eq!(actual.time, expected.time, "history time at {time}");
+                    assert_eq!(actual.gradients, expected.gradients, "history at {time}");
+                }
+                let actual = cached_frame.encoding();
+                let expected = live_frame.encoding();
+                assert_eq!(actual.draw_data, expected.draw_data, "time {time}");
+                assert!(
+                    actual.draw_tags == expected.draw_tags,
+                    "draw tags at {time}"
+                );
+                assert!(
+                    actual.path_tags == expected.path_tags,
+                    "path tags at {time}"
+                );
+                assert_eq!(actual.transforms, expected.transforms, "time {time}");
+                let glyph_positions = |scene: &Scene| {
+                    scene
+                        .encoding()
+                        .resources
+                        .glyphs
+                        .iter()
+                        .map(|glyph| (glyph.id, glyph.x, glyph.y))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(glyph_positions(&cached_frame), glyph_positions(&live_frame));
+                assert_eq!(actual.resources.color_stops, expected.resources.color_stops);
+                assert_eq!(
+                    actual.resources.normalized_coords,
+                    expected.resources.normalized_coords
+                );
+                assert_eq!(
+                    actual.resources.glyph_runs.len(),
+                    expected.resources.glyph_runs.len()
+                );
+                for (actual, expected) in actual
+                    .resources
+                    .glyph_runs
+                    .iter()
+                    .zip(&expected.resources.glyph_runs)
+                {
+                    assert_eq!(actual.transform, expected.transform);
+                    assert_eq!(actual.font.index, expected.font.index);
+                    assert!(actual.font.data.as_ref() == expected.font.data.as_ref());
+                    assert_eq!(actual.glyphs, expected.glyphs);
+                    assert_eq!(actual.normalized_coords, expected.normalized_coords);
+                    assert_eq!(
+                        actual.stream_offsets.draw_data,
+                        expected.stream_offsets.draw_data
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn spicy_settled_preparation_excludes_bitmap_coverage() {
+        let settings = Settings {
+            style: Style::Spicy,
+            font_scale: 1.0,
+            landscape: false,
+        };
+        let fixture = data();
+        let (track, _, _) = track(&fixture["packets"][0], true);
+        let source = track.lines()[0].voice(0).unwrap();
+        let policy = Policy::voice(&settings, 1.0, false, 30.0, 350.0);
+        let mut fonts = fonts();
+        let mut layouts = LayoutContext::new();
+        for voice in [None, Some(source)] {
+            let mut translation = Translation::prepare(
+                "Outline subtitle",
+                &policy,
+                false,
+                20.0,
+                &mut fonts,
+                &mut layouts,
+                false,
+                voice,
+            );
+            assert!(matches!(
+                &translation.ink,
+                Ink::Spicy {
+                    settled: Some(_),
+                    ..
+                }
+            ));
+            // Inject real image coverage before invoking the same eligibility check as prepare.
+            add_test_bitmap(&mut translation);
+            translation.prepare_settled(voice);
+            assert!(matches!(&translation.ink, Ink::Spicy { settled: None, .. }));
+        }
     }
 
     #[test]
@@ -1629,6 +1986,18 @@ mod tests {
                 Some(source),
             );
             assert_eq!(translation.missing_glyphs, 0);
+            if let Ink::Spicy {
+                words: Some(words),
+                settled,
+                ..
+            } = &translation.ink
+                && words.pieces.iter().any(|piece| piece.fallback.is_some())
+            {
+                assert!(
+                    settled.is_none(),
+                    "bitmap coverage must stay on the live path"
+                );
+            }
             // Exercise cached bitmap coverage even on hosts without a color font.
             add_test_bitmap(&mut translation);
             let mut draw = || {
@@ -1682,11 +2051,13 @@ mod tests {
         let Ink::Spicy {
             words: Some(words),
             bounds,
+            settled,
             ..
         } = &mut t.ink
         else {
             panic!("missing prepared bitmap words");
         };
+        *settled = None;
         let image = ImageBrush::new(ImageData {
             data: Blob::new(Arc::new([0, 255, 0, 255])),
             format: ImageFormat::Rgba8,

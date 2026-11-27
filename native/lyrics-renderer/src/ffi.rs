@@ -2197,12 +2197,7 @@ mod tests {
         assert_eq!(std::mem::offset_of!(Metrics, next_cue_native_ms), 152);
         assert_eq!(std::mem::offset_of!(Metrics, visible_changes), 160);
     }
-    fn preparation_track() -> TrackScene {
-        let data: serde_json::Value =
-            serde_json::from_str(include_str!("../test/background-voices.json")).unwrap();
-        let packet =
-            TrackPacket::parse(&serde_json::to_vec(&data["cases"][0]["packet"]).unwrap()).unwrap();
-        let settings = packet.settings.clone().unwrap();
+    fn preparation_fonts() -> crate::typography::Fonts {
         let mut fonts = crate::typography::Fonts::default();
         fonts
             .register(
@@ -2210,15 +2205,145 @@ mod tests {
                 include_bytes!("../../../ExpoLyrics/assets/fonts/SF-Pro-Display-Bold.otf"),
             )
             .unwrap();
+        fonts
+    }
+
+    fn preparation_track() -> TrackScene {
+        let data: serde_json::Value =
+            serde_json::from_str(include_str!("../test/background-voices.json")).unwrap();
+        let packet =
+            TrackPacket::parse(&serde_json::to_vec(&data["cases"][0]["packet"]).unwrap()).unwrap();
+        let settings = packet.settings.clone().unwrap();
         TrackScene::with_fonts(
             packet.into_lines(),
             390,
             640,
             1.0,
             Some(&settings),
-            &mut fonts,
+            &mut preparation_fonts(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn translated_track_returns_through_intermediate_offsets_at_both_cadences() {
+        use crate::typography::{PaintVoice, PaintWord, Settings, Style};
+
+        const VIEWPORT: u32 = 640;
+        const ROWS: u32 = 48;
+        const TIME: f64 = 500.0;
+        let text = "Return";
+        let lines: Vec<_> = (0..ROWS)
+            .map(|row| {
+                let start = f64::from(row) * 1000.0;
+                let end = start + 1000.0;
+                Line {
+                    text: text.into(),
+                    start,
+                    end,
+                    background_end: end,
+                    atoms: vec![crate::Atom {
+                        bytes: 0..text.len(),
+                        start,
+                        end,
+                    }],
+                    paint: Some(PaintVoice {
+                        translation: Some("Una línea traducida".into()),
+                        start,
+                        end,
+                        text: text.into(),
+                        words: vec![PaintWord {
+                            appearance: None,
+                            text: text.into(),
+                            offset: 0,
+                            start,
+                            end,
+                            joined: false,
+                            gap_after: false,
+                            group: None,
+                            graphemes: text.chars().map(|letter| letter.to_string()).collect(),
+                        }],
+                        cjk_breaks: Vec::new(),
+                        opposite: false,
+                        duet: false,
+                    }),
+                    backgrounds: Vec::new(),
+                }
+            })
+            .collect();
+        let viewport = f64::from(VIEWPORT);
+        let mut fonts = preparation_fonts();
+        for style in [Style::Amll, Style::Spicy] {
+            let settings = Settings {
+                style,
+                font_scale: 1.0,
+                landscape: false,
+            };
+            for hz in [60, 120] {
+                let mut layout = TrackScene::with_fonts(
+                    lines.clone(),
+                    390,
+                    VIEWPORT,
+                    1.0,
+                    Some(&settings),
+                    &mut fonts,
+                )
+                .unwrap();
+                layout.prepare(TIME).unwrap();
+                let mut scroll = FollowScroll::default();
+                scroll.configure(style, 1.0, layout.lines().len());
+                let command = layout.scroll_command(TIME, 0.0);
+                scroll.sample(&command, 0.0, true);
+                scroll.drag(
+                    layout.row_top(24) - scroll.position(),
+                    layout.max_scroll(),
+                    viewport,
+                );
+                let start = manual_frame_for_test(&mut layout, &mut scroll, TIME, 16.0);
+                let target = layout.scroll_target(TIME);
+                assert!((start - target).abs() > viewport, "{style:?} at {hz} Hz");
+                assert!(!scroll.release(0.0, layout.max_scroll(), viewport, Some(target), 16.0));
+                scroll.resume_follow();
+
+                let start_row = layout.return_coordinate(start).0;
+                let target_row = layout.return_coordinate(target).0;
+                let mut intermediate_frames = 0;
+                for tick in 0..=hz {
+                    let native_ms = 100.0 + f64::from(tick) * 1000.0 / f64::from(hz);
+                    let (offset, _, _) = return_frame_for_test(
+                        &mut layout,
+                        &mut scroll,
+                        TIME,
+                        || native_ms,
+                        || Ok(Some(())),
+                    )
+                    .expect("return pose must be drawable");
+                    let row = layout.return_coordinate(offset).0;
+                    if tick == 0 {
+                        assert!(
+                            (row - start_row).abs() < 1e-7,
+                            "{style:?} at {hz} Hz: first frame"
+                        );
+                    }
+                    let fraction = (row - target_row) / (start_row - target_row);
+                    if (0.25..0.75).contains(&fraction) {
+                        intermediate_frames += 1;
+                    }
+                    if !scroll.animating() {
+                        break;
+                    }
+                }
+                assert!(
+                    intermediate_frames >= 2,
+                    "{style:?} at {hz} Hz: skipped intermediate offsets"
+                );
+                assert!(
+                    !scroll.animating(),
+                    "{style:?} at {hz} Hz: return never settled"
+                );
+                assert!((scroll.position() - layout.scroll_target(TIME)).abs() < 1e-7);
+            }
+        }
     }
 
     #[test]
