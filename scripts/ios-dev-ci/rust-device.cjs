@@ -5,7 +5,9 @@ const { execFileSync } = require('node:child_process');
 const config = require('./config.json');
 function effectiveRust(buildConfig = config, kind = process.env.KINESYNC_IOS_BUILD_KIND ?? 'release') {
   if (kind !== 'release' && kind !== 'development') throw new Error('Invalid KINESYNC_IOS_BUILD_KIND');
-  if (buildConfig.rust.features.includes('dev-frame-trace')) throw new Error('dev-frame-trace must be development-only');
+  for (const feature of ['dev-frame-trace', 'dev-render-metrics']) {
+    if (buildConfig.rust.features.includes(feature)) throw new Error(`${feature} must be development-only`);
+  }
   return { ...buildConfig.rust, features: kind === 'development'
     ? [...new Set([...buildConfig.rust.features, ...buildConfig.developmentRustFeatures])]
     : buildConfig.rust.features };
@@ -16,8 +18,13 @@ function validateRustIdentity(manifest, cacheKey, rust) {
   }
 }
 function validateTraceMarker(nm, rust) {
-  if (/\b_kr_frame_trace_build_marker\s*$/m.test(nm) !== rust.features.includes('dev-frame-trace')) {
+  const trace = rust.features.includes('dev-frame-trace');
+  const metrics = trace || rust.features.includes('dev-render-metrics');
+  if (/\b_kr_frame_trace_build_marker\s*$/m.test(nm) !== trace) {
     throw new Error('Static library trace feature mismatch');
+  }
+  if (/\b_kr_render_metrics_build_marker\s*$/m.test(nm) !== metrics) {
+    throw new Error('Static library metrics feature mismatch');
   }
 }
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');

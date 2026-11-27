@@ -24,6 +24,8 @@ import { usePlaybackStore } from '@/store/playback-store';
 import type { LyricLine, LyricsMetadata } from '@/types/bridge';
 
 type ImportDraft = { lyrics: LyricLine[]; durationMs: number; album?: string; spotifyTrackId?: string; metadata?: LyricsMetadata; shared: boolean };
+// Only local validation messages are safe to display verbatim.
+class VaultInputError extends Error {}
 const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
 
 const vaultKey = (entry: MobileVaultSummary) => entry.vaultId;
@@ -49,20 +51,20 @@ export default function VaultScreen() {
   const canSaveCurrent = usePlaybackStore(s => Boolean(s.currentTrack && s.lyrics.length));
   const reload = useCallback(async () => {
     try { setEntries(await readVaultCatalog()); }
-    catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
+    catch { setMessage('Couldn’t load your saved lyrics. Try again.'); }
   }, []);
   useFocusEffect(useCallback(() => { void reload(); }, [reload]));
 
   const prepareImport = useCallback(async (uri: string, name: string, shared: boolean) => {
     setMessage('');
-    if (name && !/\.ttml$/i.test(name)) throw new Error('Choose a .ttml lyrics file.');
-    if (!/^(file|content):\/\//i.test(uri)) throw new Error('Share a local .ttml file.');
+    if (name && !/\.ttml$/i.test(name)) throw new VaultInputError('Choose a .ttml lyrics file.');
+    if (!/^(file|content):\/\//i.test(uri)) throw new VaultInputError('Share a local .ttml file.');
     const file = new File(uri);
-    if (file.size > MAX_IMPORT_BYTES) throw new Error('This file is too large (maximum 2 MB).');
+    if (file.size > MAX_IMPORT_BYTES) throw new VaultInputError('This file is too large (maximum 2 MB).');
     const content = await file.text();
-    if (content.length > MAX_IMPORT_BYTES || !/<(?:\w+:)?tt[\s>]/i.test(content)) throw new Error('This is not a valid TTML document.');
+    if (content.length > MAX_IMPORT_BYTES || !/<(?:\w+:)?tt[\s>]/i.test(content)) throw new VaultInputError('This is not a valid TTML document.');
     const parsed = parseTtmlToLyrics(content);
-    if (!parsed.lyrics.length) throw new Error('This file contains no readable lyrics.');
+    if (!parsed.lyrics.length) throw new VaultInputError('This file contains no readable lyrics.');
     const metadata = extractTtmlMetadata(content);
     setEditing(null);
     if (metadata.title && metadata.artist) {
@@ -78,14 +80,14 @@ export default function VaultScreen() {
   }, [clearSharedPayloads, reload]);
 
   useEffect(() => {
-    if (error) setMessage(error.message);
+    if (error) setMessage('Couldn’t open the shared file. Share a local .ttml file and try again.');
     const payload = resolvedSharedPayloads[0];
     if (!payload?.contentUri) { handled.current = ""; return; }
     if (handled.current === payload.contentUri) return;
     handled.current = payload.contentUri;
     setBusy(true);
     void prepareImport(payload.contentUri, payload.originalName || '', true)
-      .catch(e => setMessage(e instanceof Error ? e.message : String(e)))
+      .catch(e => setMessage(e instanceof VaultInputError ? e.message : 'Couldn’t import this file. Try again.'))
       .finally(() => setBusy(false));
   }, [resolvedSharedPayloads, prepareImport, error]);
 
@@ -93,7 +95,7 @@ export default function VaultScreen() {
     if (busy) return;
     setBusy(true); setMessage('');
     try { await operation(); await reload(); }
-    catch (e) { setMessage(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setMessage(e instanceof VaultInputError ? e.message : 'Couldn’t update the vault. Try again.'); }
     finally { setBusy(false); }
   }, [busy, reload]);
   const closeEditor = () => {
@@ -118,7 +120,7 @@ export default function VaultScreen() {
           <Button accessibilityLabel={`Edit ${entry.track.title}`} disabled={busy || Boolean(draft)} style={[styles.songAction, (busy || Boolean(draft)) && styles.disabled]} onPress={() => { setEditing(entry.vaultId); setTitle(entry.track.title); setArtist(entry.track.artist); }}><Ionicons name="create-outline" size={17} color={Design.text} /><Text style={styles.actionText}>Edit</Text></Button>
           <Button accessibilityLabel={entry.exportRestricted ? `Export ${entry.track.title} from lrc.red` : `Export ${entry.track.title}`} disabled={busy} style={[styles.songAction, busy && styles.disabled]} onPress={() => void run(async () => {
             const full = await getMobileVaultEntry(entry.vaultId);
-            if (!full) throw new Error("These lyrics are no longer available. Refresh your vault.");
+            if (!full) throw new VaultInputError("These lyrics are no longer available. Refresh your vault.");
             if (isSpicyLyricsResponse(full)) {
               setLrcRedMessage('');
               setRestrictedConfirm(false);
@@ -162,7 +164,7 @@ export default function VaultScreen() {
         Number(latest.track.durationMs || 0) === Number(bound.full.track.durationMs || 0) &&
         String(latest.track.spotifyTrackId || '') === String(bound.full.track.spotifyTrackId || '') &&
         String(latest.metadata?.fetchOrigin?.isrc || '') === String(bound.full.metadata?.fetchOrigin?.isrc || '');
-      if (!sameTrack) throw new Error('The saved song changed before export. Try again.');
+      if (!sameTrack) throw new VaultInputError('The saved song changed before export. Try again.');
       if (requestId !== restrictedRequest.current) return;
       const file = new File(Paths.cache, buildDefaultTtmlFilename(bound.full.track));
       file.create({ overwrite: true });
@@ -171,7 +173,7 @@ export default function VaultScreen() {
       await shareAsync(file.uri, { mimeType: 'application/ttml+xml', UTI: 'public.xml' });
       if (requestId === restrictedRequest.current) closeRestrictedExport();
     } catch (error) {
-      if (requestId === restrictedRequest.current) setLrcRedMessage(error instanceof Error ? error.message : String(error));
+      if (requestId === restrictedRequest.current) setLrcRedMessage(error instanceof VaultInputError ? error.message : 'Couldn’t export lyrics from lrc.red. Try again.');
     } finally {
       if (requestId === restrictedRequest.current) setLrcRedBusy(false);
     }
@@ -208,7 +210,7 @@ export default function VaultScreen() {
           <Text style={styles.sectionLabel}>ADD TO YOUR VAULT</Text>
           <View style={styles.addActions}>
         <Button accessibilityLabel="Import TTML lyrics file" disabled={busy} style={[styles.primaryButton, busy && styles.disabled]} onPress={() => void run(async () => {
-          if (Platform.OS === 'web') throw new Error('File import is available in the mobile app.');
+          if (Platform.OS === 'web') throw new VaultInputError('File import is available in the mobile app.');
           const result = await File.pickFileAsync({ mimeTypes: ['*/*'] });
           if (!result.canceled) await prepareImport(result.result.uri, result.result.name, false);
         })}><Ionicons name="add-circle-outline" size={20} color={Design.accentInk} /><Text style={styles.primaryButtonText}>Import TTML</Text></Button>
@@ -238,7 +240,7 @@ export default function VaultScreen() {
         </View>
         <View style={styles.actions}>
           <Button disabled={busy} style={[styles.primaryButton, styles.editorButton, busy && styles.disabled]} onPress={() => void run(async () => {
-            if (!title.trim() || !artist.trim()) throw new Error('Enter a song name and artist.');
+            if (!title.trim() || !artist.trim()) throw new VaultInputError('Enter a song name and artist.');
             if (editing) await renameMobileVaultEntry(editing, title, artist);
             else if (draft) await saveMobileVaultLyrics({ track: { id: `import-${Date.now()}`, title: title.trim(), artist: artist.trim(), album: draft.album, spotifyTrackId: draft.spotifyTrackId, durationMs: draft.durationMs }, lyrics: draft.lyrics, metadata: draft.metadata, originalSource: 'ttml-import' });
             closeEditor(); setMessage('Saved to local vault.');

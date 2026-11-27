@@ -3,18 +3,19 @@ import { AppState, DevSettings, Linking, PanResponder, Platform, StyleSheet, Tex
 import { requireNativeViewManager, requireOptionalNativeModule } from 'expo-modules-core';
 import { usePlaybackStore, type LyricsStyle } from '@/store/playback-store';
 import { anchorChanged, nextVisualAnchor, type VisualAnchor } from '@/lib/rust-lyrics-protocol';
-import { acceptsTraceSummary, applyTraceReset, type LegacyMetrics, type TraceEvent, type TraceExport, type TraceGate, type TraceReset, type TraceUpdate } from '@/lib/rust-frame-trace';
+import type { LegacyMetrics, TraceEvent, TraceExport, TraceGate, TraceReset, TraceUpdate } from '@/lib/rust-frame-trace';
 import { createRustLyricsGesture } from '@/lib/rust-lyrics-gesture';
 import { createRustLyricsFollow, type FollowCommand } from '@/lib/rust-lyrics-follow';
 import type { LyricLine } from '@/types/bridge';
 import type { PreviewPlaybackAnchor } from '@/components/lyrics/use-playback-timeline-clock';
 
 import { prepareRustTrack } from '@/lib/rust-lyrics-preparation';
-import { arrivalEvent, arrivalHandle, arrivalSpan } from '@/lib/lyrics-arrival-trace';
 import { LANDSCAPE_FONT_SCALE } from '@/constants/player-layout';
 import { selectTimedLyricLines, shouldHideTimedRenderer } from '@/lib/lyrics-timing';
 import { getStaticLineText, StaticLyricsView } from './static-lyrics-view';
-import { RustFpsOverlay } from './rust-fps-overlay';
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const arrivalTrace = typeof __DEV__ !== 'undefined' && __DEV__ ? require('@/lib/lyrics-arrival-trace') as typeof import('@/lib/lyrics-arrival-trace') : null;
 
 type NativeApi = { abiVersion(): number; monotonicMs(): number; frameTraceAvailable?(): boolean };
 type NativeRef = { setAnchor(value: string): Promise<void>; setFollowing(value: boolean, epoch: number, generation: number, gesture: boolean): Promise<void>; scrollBy(dy: number): Promise<void>; fling(velocity: number): Promise<void>; hitTest(x: number, y: number): Promise<number>; exportFrameTrace?(session: string): Promise<string> };
@@ -40,8 +41,8 @@ function loadNative(): { api: NativeApi | null; view: React.ComponentType<Props>
 }
 const { api, view: NativeView, error: moduleError } = loadNative();
 const frameTraceSupported = __DEV__ && Platform.OS === 'ios' && api?.frameTraceAvailable?.() === true;
-if (frameTraceSupported) {
-  DevSettings.addMenuItem('Show Rust debug overlay', () => usePlaybackStore.getState().setShowRustDebugOverlay(true));
+if (__DEV__ && frameTraceSupported) {
+  DevSettings.addMenuItem('Show Rust debug overlay', () => usePlaybackStore.getState().setShowRustDebugOverlay?.(true));
 }
 export const rustLyricsAvailable = NativeView !== null;
 let nextGeneration = 0;
@@ -65,7 +66,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const isDemo = demoLyrics !== undefined;
   const interactive = !isDemo || demoInteractive;
   const rawLyrics = usePlaybackStore(state => demoLyrics ?? state.lyrics);
-  const arrival = __DEV__ ? arrivalHandle(rawLyrics) : undefined;
+  const arrival = __DEV__ ? arrivalTrace?.arrivalHandle(rawLyrics) : undefined;
   const metadata = usePlaybackStore(state => isDemo ? null : state.lyricsMetadata);
   const lyricsSource = usePlaybackStore(state => isDemo ? '' : state.lyricsSource);
   // Plain lyrics use the raw store rows, including older provider results
@@ -93,7 +94,6 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     title: untimed ? 'Plain lyrics available' : metadata?.instrumental ? 'This song is an instrumental' : 'No synced lyrics yet',
     subtitle: untimed ? 'Timed lyrics are unavailable for this recording.' : lyricsStatusMessage || `Source: ${lyricsSource || 'unavailable'}`,
   }, [lyrics.length, metadata?.instrumental, lyricsStatusMessage, lyricsSource, untimed]);
-  const showRustDebugOverlay = usePlaybackStore(state => __DEV__ && !isDemo && state.showRustDebugOverlay);
   const trackId = usePlaybackStore(state => isDemo ? 'kinesync-demo' : state.currentTrack?.id ?? '');
   const style = usePlaybackStore(state => isDemo ? demoStyle : state.lyricsStyle);
   const showTranslation = usePlaybackStore(state => isDemo ? showTranslatedText ?? true : state.showTranslatedText);
@@ -105,7 +105,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     if (showStaticLyrics) return { json: '', error: '' };
     try {
       const prepare = () => prepareRustTrack(trackId, revision.generation, lyrics, style === 'amll' ? 'amll' : 'spicy', fontScale, landscape, showTranslation, credits, empty);
-      const json = arrival ? arrivalSpan(arrival, revision.generation, 'rust-packet-prepared', prepare) : prepare();
+      const json = __DEV__ && arrival && arrivalTrace ? arrivalTrace.arrivalSpan(arrival, revision.generation, 'rust-packet-prepared', prepare) : prepare();
       return { json, error: '' };
     }
     catch (error) { return { json: '', error: String(error) }; }
@@ -114,15 +114,11 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const mounted = useRef(true);
   const sequence = useRef(0);
   const visual = useRef<(VisualAnchor & { generation: number; surfaceEpoch: number; style: string }) | null>(null);
-  const [surfaceEpoch, setSurfaceEpoch] = useState(0);
-  const [rate, setRate] = useState(1);
-  const [traceRun, setTraceRun] = useState(0);
-  const nextTraceRun = useRef<number | null>(null);
-  const activeTrace = useRef<TraceGate | null>(null);
+  const debugState = useRendererDebugState(isDemo);
+  const { surfaceEpoch, rate } = debugState;
   const [status, setStatus] = useState('Preparing Rust Metal renderer');
   const [failed, setFailed] = useState(false);
   const [readySurface, setReadySurface] = useState<{ generation: number; surfaceEpoch: number } | null>(null);
-  const traceSubscription = useRef<((update: TraceUpdate) => void) | null>(null);
   const identity = useRef({ generation: revision.generation, surfaceEpoch });
   identity.current = { generation: revision.generation, surfaceEpoch };
   const latest = useRef({ shouldRevealTap, tapToSeekEnabled, onLinePress, onLineLongPress, onAutoFollowChange, onUserInteraction, onCreditsTimestampPress, metadata, lyrics });
@@ -256,7 +252,7 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     if (nativeEvent.state === 'error') setReadySurface(null);
     if (nativeEvent.state === 'ready') {
       setReadySurface({ generation: revision.generation, surfaceEpoch });
-      if (arrival) arrivalEvent(arrival, revision.generation, 'rust-track-ready-not-presentation');
+      if (__DEV__ && arrival) arrivalTrace?.arrivalEvent(arrival, revision.generation, 'rust-track-ready-not-presentation');
       // A handoff sent before the native owner existed is replayed by the owner
       // now. Reassert the current intent rather than a render-captured value.
       const command = follow.current.reassert(revision.generation);
@@ -264,54 +260,6 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
       sendAnchor();
     }
   }, [arrival, follow, revision.generation, sendFollow, sendAnchor, surfaceEpoch]);
-  const onFrameTrace = useCallback(({ nativeEvent }: { nativeEvent: TraceEvent }) => {
-    const capture = activeTrace.current;
-    if (!mounted.current || identity.current.surfaceEpoch !== surfaceEpoch || nativeEvent.surface !== surfaceEpoch ||
-        nativeEvent.generation !== identity.current.generation || !capture || !acceptsTraceSummary(capture, nativeEvent)) return;
-    traceSubscription.current?.({ kind: 'trace', event: nativeEvent });
-  }, [surfaceEpoch]);
-  const onFrameTraceReset = useCallback(({ nativeEvent }: { nativeEvent: TraceReset }) => {
-    const capture = activeTrace.current;
-    if (!mounted.current || identity.current.surfaceEpoch !== surfaceEpoch || nativeEvent.surface !== surfaceEpoch ||
-        nativeEvent.generation !== identity.current.generation || !capture || !applyTraceReset(capture, nativeEvent)) return;
-    traceSubscription.current?.({ kind: 'reset' });
-  }, [surfaceEpoch]);
-  const onMetrics = useCallback(({ nativeEvent }: { nativeEvent: LegacyMetrics }) => {
-    if (mounted.current && identity.current.surfaceEpoch === surfaceEpoch && nativeEvent.generation === identity.current.generation) {
-      traceSubscription.current?.({ kind: 'legacy', event: nativeEvent });
-    }
-  }, [surfaceEpoch]);
-  const exportFrameTrace = useCallback(async (): Promise<TraceExport> => {
-    const view = native.current;
-    const capture = activeTrace.current;
-    const { generation, surfaceEpoch: surface } = identity.current;
-    if (!view?.exportFrameTrace || !capture?.active) throw new Error('Frame trace export is unavailable.');
-    const { session, minimumToken } = capture;
-    const isCurrent = () => mounted.current && native.current === view &&
-      activeTrace.current === capture && capture.active && capture.minimumToken === minimumToken &&
-      identity.current.generation === generation && identity.current.surfaceEpoch === surface;
-    const json = await view.exportFrameTrace(session);
-    if (!isCurrent()) throw new Error('The capture changed before export.');
-    return { json, expected: { session, generation, surface, minimumToken, token: minimumToken }, isCurrent };
-  }, []);
-  const setCapture = useCallback((enabled: boolean) => {
-    activeTrace.current = null;
-    if (enabled) nextTraceRun.current = (nextTraceRun.current ?? 0) + 1;
-    setTraceRun(enabled ? nextTraceRun.current ?? 0 : 0);
-  }, []);
-  const hideTracePanel = useCallback(() => {
-    if (activeTrace.current) activeTrace.current.visibleSince = Infinity;
-    usePlaybackStore.getState().setShowRustDebugOverlay(false);
-  }, []);
-  const recreateSurface = useCallback(() => {
-    activeTrace.current = null;
-    setSurfaceEpoch(value => value + 1);
-    setFailed(false);
-    setStatus('Recreating Rust surface');
-  }, []);
-  const cycleVisualRate = useCallback(() => {
-    setRate(value => value === 1 ? 0.5 : value === 0.5 ? 1.5 : 1);
-  }, []);
   const waiting = !isDemo && payload.error.includes(WAITING_LYRICS);
   const unavailable = moduleError || (waiting ? '' : payload.error);
   useEffect(() => {
@@ -322,9 +270,6 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     // teardown; genuine errors return on the next status/anchor command.
     setFailed(false);
   }, [revision.generation]);
-  useEffect(() => {
-    if (__DEV__ && !showStaticLyrics && !isDemo && (unavailable || failed)) console.error('Rust lyrics renderer:', unavailable || status);
-  }, [isDemo, unavailable, failed, status, showStaticLyrics]);
   const nativeGestureReady = active && interactive && rustLyricsAvailable && !!payload.json &&
     !unavailable && !failed && readySurface?.generation === revision.generation &&
     readySurface.surfaceEpoch === surfaceEpoch;
@@ -336,18 +281,14 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     return () => onRevealOwnershipChange(false);
   }, [ownsReveal, onRevealOwnershipChange]);
   const visibleError = unavailable || (failed ? status : '');
-  const traceSession = frameTraceSupported && traceRun > 0 && !failed && !unavailable && !showStaticLyrics && payload.json
-    ? `${revision.generation}:${surfaceEpoch}:${traceRun}` : '';
-  if (!traceSession) {
-    activeTrace.current = null;
-  } else if (activeTrace.current?.session !== traceSession) {
-    activeTrace.current = { session: traceSession, minimumToken: 0, active: false, visibleSince: Infinity };
-  }
-  const trace = activeTrace.current;
-  if (trace) {
-    if (!showRustDebugOverlay) trace.visibleSince = Infinity;
-    else if (trace.visibleSince === Infinity) trace.visibleSince = api?.monotonicMs() ?? 0;
-  }
+  // __DEV__ is an invariant of the bundle.
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const { frameProps, overlay }: Diagnostics = __DEV__ ? useRendererDiagnostics({
+    ...debugState, native, mounted, identity, failed, unavailable, status, isDemo, showStaticLyrics,
+    hasTrack: !!payload.json && !showStaticLyrics,
+    ready: readySurface?.generation === revision.generation && readySurface?.surfaceEpoch === surfaceEpoch,
+    setFailed, setStatus,
+  }) : {};
   if (showStaticLyrics) {
     return <StaticLyricsView key={trackId} lines={rawLyrics} fontScale={fontScale} landscape={landscape}
       showTranslation={showTranslation} credits={credits} interactive={interactive}
@@ -357,21 +298,132 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
     <View style={styles.gestureWrap} pointerEvents={interactive ? undefined : 'none'} {...(nativeGestureReady ? panResponder.panHandlers : {})}>
       {(unavailable || failed) ? <Text style={styles.rendererError}>
         {isDemo && !demoInteractive ? 'Lyrics preview unavailable.' : 'Lyrics renderer unavailable.'}
-        {' Choose Skia in Settings → Advanced → Lyrics renderer.'}
+        {isDemo && !demoInteractive ? null : ' Reopen KineSync and try again.'}
         {__DEV__ && visibleError ? ` ${visibleError}` : null}
       </Text> : null}
       {payload.json && !unavailable && !failed && NativeView ? <NativeView key={surfaceEpoch} ref={native}
         style={styles.canvas} trackJson={payload.json} active={active} onStatus={onStatus}
-        {...(frameTraceSupported ? { traceSession, tracePanelVisible: showRustDebugOverlay, onFrameTrace, onFrameTraceReset } : {})}
-        onMetrics={__DEV__ && showRustDebugOverlay && Platform.OS === 'android' ? onMetrics : undefined} /> : null}
+        {...frameProps} /> : null}
     </View>
-    {__DEV__ && showRustDebugOverlay && !unavailable ? <RustFpsOverlay key={`${revision.generation}:${surfaceEpoch}:${traceRun}`}
-      subscription={traceSubscription} supported={frameTraceSupported} android={Platform.OS === 'android'}
-      failed={failed} capturing={!!traceSession} ready={readySurface?.generation === revision.generation && readySurface?.surfaceEpoch === surfaceEpoch}
-      visualRate={rate} onCapture={setCapture} onExport={exportFrameTrace} onHide={hideTracePanel}
-      onRecreate={recreateSurface} onVisualRate={cycleVisualRate} /> : null}
+    {overlay}
   </View>;
 });
+type DebugState = {
+  surfaceEpoch: number; rate: number; debug?: boolean;
+  setSurfaceEpoch?: React.Dispatch<React.SetStateAction<number>>;
+  setRate?: React.Dispatch<React.SetStateAction<number>>;
+};
+type DiagnosticsInputs = DebugState & {
+  native: React.RefObject<NativeRef | null>; mounted: React.RefObject<boolean>;
+  identity: React.RefObject<{ generation: number; surfaceEpoch: number }>;
+  failed: boolean; unavailable: string; hasTrack: boolean; ready: boolean;
+  status: string; isDemo: boolean; showStaticLyrics: boolean;
+  setFailed: React.Dispatch<React.SetStateAction<boolean>>;
+  setStatus: React.Dispatch<React.SetStateAction<string>>;
+};
+type Diagnostics = {
+  frameProps?: Pick<Props, 'traceSession' | 'tracePanelVisible' | 'onFrameTrace' | 'onFrameTraceReset' | 'onMetrics'>;
+  overlay?: React.ReactNode;
+};
+
+// Metro folds these build-time branches before it collects dependencies.
+const useRendererDebugState: (isDemo: boolean) => DebugState = __DEV__
+  ? function useDebugState(isDemo) {
+      const debug = usePlaybackStore(state => !isDemo && state.showRustDebugOverlay === true);
+      const [surfaceEpoch, setSurfaceEpoch] = useState(0);
+      const [rate, setRate] = useState(1);
+      return { surfaceEpoch, rate, debug, setSurfaceEpoch, setRate };
+    }
+  : () => ({ surfaceEpoch: 0, rate: 1 });
+
+const useRendererDiagnostics: (inputs: DiagnosticsInputs) => Diagnostics = __DEV__
+  ? function useDebugDiagnostics({
+      native, mounted, identity, surfaceEpoch, rate, debug: showRustDebugOverlay,
+      failed, unavailable, hasTrack, ready, status, isDemo, showStaticLyrics, setSurfaceEpoch, setRate, setFailed, setStatus,
+    }) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { RustFpsOverlay } = require('./rust-fps-overlay') as typeof import('./rust-fps-overlay');
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { acceptsTraceSummary, applyTraceReset } = require('@/lib/rust-frame-trace') as typeof import('@/lib/rust-frame-trace');
+      useEffect(() => {
+        if (!showStaticLyrics && !isDemo && (unavailable || failed)) console.error('Rust lyrics renderer:', unavailable || status);
+      }, [isDemo, unavailable, failed, status, showStaticLyrics]);
+      const [traceRun, setTraceRun] = useState(0);
+      const nextTraceRun = useRef<number | null>(null);
+      const activeTrace = useRef<TraceGate | null>(null);
+      const traceSubscription = useRef<((update: TraceUpdate) => void) | null>(null);
+      const onFrameTrace = useCallback(({ nativeEvent }: { nativeEvent: TraceEvent }) => {
+        const capture = activeTrace.current;
+        if (!mounted.current || identity.current.surfaceEpoch !== surfaceEpoch || nativeEvent.surface !== surfaceEpoch ||
+            nativeEvent.generation !== identity.current.generation || !capture || !acceptsTraceSummary(capture, nativeEvent)) return;
+        traceSubscription.current?.({ kind: 'trace', event: nativeEvent });
+      }, [acceptsTraceSummary, identity, mounted, surfaceEpoch]);
+      const onFrameTraceReset = useCallback(({ nativeEvent }: { nativeEvent: TraceReset }) => {
+        const capture = activeTrace.current;
+        if (!mounted.current || identity.current.surfaceEpoch !== surfaceEpoch || nativeEvent.surface !== surfaceEpoch ||
+            nativeEvent.generation !== identity.current.generation || !capture || !applyTraceReset(capture, nativeEvent)) return;
+        traceSubscription.current?.({ kind: 'reset' });
+      }, [applyTraceReset, identity, mounted, surfaceEpoch]);
+      const onMetrics = useCallback(({ nativeEvent }: { nativeEvent: LegacyMetrics }) => {
+        if (mounted.current && identity.current.surfaceEpoch === surfaceEpoch && nativeEvent.generation === identity.current.generation) {
+          traceSubscription.current?.({ kind: 'legacy', event: nativeEvent });
+        }
+      }, [identity, mounted, surfaceEpoch]);
+      const exportFrameTrace = useCallback(async (): Promise<TraceExport> => {
+        const view = native.current;
+        const capture = activeTrace.current;
+        const { generation, surfaceEpoch: surface } = identity.current;
+        if (!view?.exportFrameTrace || !capture?.active) throw new Error('Frame trace export is unavailable.');
+        const { session, minimumToken } = capture;
+        const isCurrent = () => mounted.current && native.current === view &&
+          activeTrace.current === capture && capture.active && capture.minimumToken === minimumToken &&
+          identity.current.generation === generation && identity.current.surfaceEpoch === surface;
+        const json = await view.exportFrameTrace(session);
+        if (!isCurrent()) throw new Error('The capture changed before export.');
+        return { json, expected: { session, generation, surface, minimumToken, token: minimumToken }, isCurrent };
+      }, [identity, mounted, native]);
+      const setCapture = useCallback((enabled: boolean) => {
+        activeTrace.current = null;
+        if (enabled) nextTraceRun.current = (nextTraceRun.current ?? 0) + 1;
+        setTraceRun(enabled ? nextTraceRun.current ?? 0 : 0);
+      }, []);
+      const hideTracePanel = useCallback(() => {
+        if (activeTrace.current) activeTrace.current.visibleSince = Infinity;
+        usePlaybackStore.getState().setShowRustDebugOverlay?.(false);
+      }, []);
+      const recreateSurface = useCallback(() => {
+        activeTrace.current = null;
+        setSurfaceEpoch?.(value => value + 1);
+        setFailed(false);
+        setStatus('Recreating Rust surface');
+      }, [setFailed, setStatus, setSurfaceEpoch]);
+      const cycleVisualRate = useCallback(() => {
+        setRate?.(value => value === 1 ? 0.5 : value === 0.5 ? 1.5 : 1);
+      }, [setRate]);
+      const traceSession = frameTraceSupported && traceRun > 0 && !failed && !unavailable && hasTrack
+        ? `${identity.current.generation}:${surfaceEpoch}:${traceRun}` : '';
+      if (!traceSession) {
+        activeTrace.current = null;
+      } else if (activeTrace.current?.session !== traceSession) {
+        activeTrace.current = { session: traceSession, minimumToken: 0, active: false, visibleSince: Infinity };
+      }
+      const trace = activeTrace.current;
+      if (trace) {
+        if (!showRustDebugOverlay) trace.visibleSince = Infinity;
+        else if (trace.visibleSince === Infinity) trace.visibleSince = api?.monotonicMs() ?? 0;
+      }
+      return {
+        frameProps: frameTraceSupported ? { traceSession, tracePanelVisible: showRustDebugOverlay, onFrameTrace, onFrameTraceReset }
+          : showRustDebugOverlay && Platform.OS === 'android' ? { onMetrics } : undefined,
+        overlay: showRustDebugOverlay && !unavailable ? <RustFpsOverlay key={`${identity.current.generation}:${surfaceEpoch}:${traceRun}`}
+          subscription={traceSubscription} supported={frameTraceSupported} android={Platform.OS === 'android'}
+          failed={failed} capturing={!!traceSession} ready={ready}
+          visualRate={rate} onCapture={setCapture} onExport={exportFrameTrace} onHide={hideTracePanel}
+          onRecreate={recreateSurface} onVisualRate={cycleVisualRate} /> : null,
+      };
+    }
+  : () => ({});
+
 const styles = StyleSheet.create({
   root: { flex: 1, minHeight: 0, overflow: 'hidden' }, gestureWrap: { flex: 1, minHeight: 0 }, canvas: { flex: 1, minHeight: 0 },
   rendererError: { color: 'rgba(255,255,255,0.82)', fontSize: 12, paddingHorizontal: 12 },

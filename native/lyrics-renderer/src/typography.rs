@@ -1,10 +1,14 @@
 //! Static preparation only: explicit font ownership, source style geometry and wrap policy.
 //! AMLL balance costs follow amll-reference-line-break.ts (AGPL-3.0-only).
-use parley::{FontContext, FontData};
+use parley::FontContext;
+#[cfg(any(test, feature = "dev-render-metrics"))]
+use parley::FontData;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use skrifa::{FontRef, MetadataProvider, raw::TableProvider, string::StringId};
-use std::{collections::HashMap, ops::Range};
+#[cfg(any(test, feature = "dev-render-metrics"))]
+use std::collections::HashMap;
+use std::ops::Range;
 
 pub const BUNDLED_FONT_HASHES: [&str; 2] = [
     "71a2162c852e87baa6440c983e406283391646778c8bc74e57b00613a3412f80",
@@ -183,6 +187,7 @@ impl PaintVoice {
         Ok(())
     }
 }
+#[cfg(any(test, feature = "dev-render-metrics"))]
 #[derive(Clone, Debug, Serialize)]
 pub struct Face {
     pub sha256: String,
@@ -195,6 +200,7 @@ pub struct Face {
 pub struct Fonts {
     pub context: FontContext,
     pub ready: bool,
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     faces: HashMap<(u64, u32), Face>,
 }
 impl Default for Fonts {
@@ -208,6 +214,7 @@ impl Default for Fonts {
         Self {
             context,
             ready: false,
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             faces: HashMap::new(),
         }
     }
@@ -254,6 +261,7 @@ impl Fonts {
         self.ready = true;
         Ok(())
     }
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     pub fn describe(&mut self, font: &FontData) -> Face {
         self.faces
             .entry((font.data.id(), font.index))

@@ -47,7 +47,9 @@ struct Benchmark {
     height: u32,
     adapter: String,
     layout_ms: f64,
+    #[cfg(feature = "dev-render-metrics")]
     glyph_count: usize,
+    #[cfg(feature = "dev-render-metrics")]
     missing_glyphs: usize,
     warmup: usize,
     samples: Vec<Sample>,
@@ -76,11 +78,17 @@ fn setup(width: u32, height: u32) -> Result<(TrackScene, Gpu, f64), Error> {
     let start = Instant::now();
     let track = TrackScene::new(width, height)?;
     let layout_ms = start.elapsed().as_secs_f64() * 1000.0;
+    #[cfg(feature = "dev-render-metrics")]
     println!(
         "Cached layout: {layout_ms:.2} ms, {} lines, {} glyphs, {} missing glyphs",
         track.lines().len(),
         track.glyph_count,
         track.missing_glyphs
+    );
+    #[cfg(not(feature = "dev-render-metrics"))]
+    println!(
+        "Cached layout: {layout_ms:.2} ms, {} lines",
+        track.lines().len()
     );
     let gpu = pollster::block_on(Gpu::new(width, height))?;
     Ok((track, gpu, layout_ms))
@@ -95,7 +103,10 @@ fn render(width: u32, height: u32, time: f64, path: &str, blur: bool) -> Result<
     let stats = gpu.render(&scene, band, blur)?;
     ensure_parent(path)?;
     gpu.save(path)?;
-    println!("PNG: {path}\n{}", serde_json::to_string(&stats)?);
+    println!("PNG: {path}");
+    if cfg!(feature = "dev-render-metrics") {
+        println!("{}", serde_json::to_string(&stats)?);
+    }
     Ok(())
 }
 fn gallery(directory: &str) -> Result<(), Error> {
@@ -114,6 +125,9 @@ fn gallery(directory: &str) -> Result<(), Error> {
     Ok(())
 }
 fn benchmark(path: &str, count: usize, warmup: usize, png_dir: &str) -> Result<(), Error> {
+    if !cfg!(feature = "dev-render-metrics") {
+        return Err("Build with --features dev-render-metrics to collect benchmark timings".into());
+    }
     if count == 0 || warmup == 0 {
         return Err("sample and warmup counts must be positive".into());
     }
@@ -164,7 +178,9 @@ fn benchmark(path: &str, count: usize, warmup: usize, png_dir: &str) -> Result<(
             height,
             adapter: gpu.adapter.clone(),
             layout_ms,
+            #[cfg(feature = "dev-render-metrics")]
             glyph_count: track.glyph_count,
+            #[cfg(feature = "dev-render-metrics")]
             missing_glyphs: track.missing_glyphs,
             warmup,
             samples,

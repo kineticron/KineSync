@@ -9,6 +9,24 @@ const root = path.resolve(__dirname, '../..');
 const mobileFile = path.join(root, 'ExpoLyrics/lib/mobile-lyrics-service.js');
 const parts = ['03-qq-sources.js', '04-netease-spicy-lrclib-sources.js', '04-kugou-source.js',
   '04-lrc-red-source.js', '07a-source-scoring.js', '07b-service-orchestration.js'];
+const mobileDev = 'typeof __DEV__ !== "undefined" && __DEV__';
+
+// Keep Desktop Bridge diagnostics intact. Metro can remove these calls and their
+// argument construction before it collects dependencies for the mobile release.
+function gateSpicyDiagnostics(source) {
+  return source.replace('function createSpicyFetchProfiler() {',
+    `const createSpicyFetchProfiler = ${mobileDev} ? function createSpicyFetchProfiler() {`)
+    .replace(/\n\}\n\nfunction createSpicyNoMatch\(/, '\n} : null;\n\nfunction createSpicyNoMatch(')
+    .replace('const profile = createSpicyFetchProfiler();',
+      `const profile = ${mobileDev} ? createSpicyFetchProfiler?.() : null;`)
+    .replace(/const (parse|variant|qq)StartedAt = Date\.now\(\);/g,
+      (_, stage) => `const ${stage}StartedAt = ${mobileDev} ? Date.now() : 0;`)
+    .replace(/^([ \t]+)profile\.(mark|finish)\(/gm,
+      (_, indent, method) => `${indent}if (${mobileDev}) profile?.${method}(`)
+    .replace(/^([ \t]+)spicyDebugLog\(/gm,
+      (_, indent) => `${indent}if (${mobileDev}) spicyDebugLog?.(`);
+}
+
 function generate(input) {
   let output = input;
   for (const name of parts) {
@@ -23,6 +41,9 @@ function generate(input) {
     source = source.replaceAll('require("./lyricsRecordingIdentity")', 'require("../../DesktopBridge/src/lyricsRecordingIdentity")');
     source = source.replaceAll('require("./lyricsAutoPicker")', 'require("../../DesktopBridge/src/lyricsAutoPicker")')
       .replaceAll('require("./lyricsTtmlTranslations")', 'require("../../DesktopBridge/src/lyricsTtmlTranslations")');
+    if (name === '04-netease-spicy-lrclib-sources.js') {
+      source = gateSpicyDiagnostics(source);
+    }
     if (name === '04-lrc-red-source.js') {
       source = '"use strict";\n\n' + source.replaceAll(
         'const { parseTtmlToLyrics, parseTtmlTimeExpression, extractTtmlMetadata } = require("./lyricsTtmlImport");',
@@ -31,24 +52,24 @@ function generate(input) {
   const extractTtmlMetadata = extractLrcRedTtmlMetadata;`,
       ).replace(
         '        const content = await fetchText(`https://lrc.red/s/${candidate.isrc}.ttml`, { headers: lrcRedHeaders });',
-        `        const tracePacket = {};
-        const trace = typeof __DEV__ !== 'undefined' && __DEV__ ? beginArrival(tracePacket, 'lrc-red') : undefined;
+        `        const trace = typeof __DEV__ !== 'undefined' && __DEV__ ? arrivalDiagnostics?.beginArrival({}, 'lrc-red') : undefined;
         const content = await fetchText(\`https://lrc.red/s/\${candidate.isrc}.ttml\`, { headers: lrcRedHeaders, arrivalTrace: trace });`,
       ).replace(
         '        const parsed = parseTtmlToLyrics(content);',
-        `        const parsed = trace ? arrivalSpan(trace, 0, 'parser', () => parseTtmlToLyrics(content)) : parseTtmlToLyrics(content);
-        if (trace && parsed.lyrics) linkArrival(parsed.lyrics, trace);`,
+        `        const parsed = typeof __DEV__ !== 'undefined' && __DEV__ && trace && arrivalDiagnostics ? arrivalDiagnostics.arrivalSpan(trace, 0, 'parser', () => parseTtmlToLyrics(content)) : parseTtmlToLyrics(content);
+        if (typeof __DEV__ !== 'undefined' && __DEV__ && trace && parsed.lyrics) arrivalDiagnostics?.linkArrival(parsed.lyrics, trace);`,
       );
     }
     if (name === '07b-service-orchestration.js') {
       source = source.replaceAll('|desktop', '|mobile').replaceAll('desktop-bridge', 'mobile-app').replaceAll('on desktop.', 'on mobile.')
         .replaceAll('require("./lyricsVault")', 'mobileLyricsVaultShim').replaceAll('require("./lyricsTtmlImport")', 'mobileTtmlImportShim')
         .replace('    getCachedSourceLyricsPacket,', '    getCachedSourceLyricsPacket,\n    resolveSpotifyCatalogTrackById,\n    resolveSpotifyCatalogTrackViaPartnerSearch,\n    buildLyricsMatchTrack,\n    mergeNativePlaybackArtist,\n    applySpotifyCatalogOverlay,');
-      source = source.replace('      const parsed = parseTtmlToLyrics(ttmlContent);', `      const tracePacket = {};
-      const trace = typeof __DEV__ !== 'undefined' && __DEV__ ? beginArrival(tracePacket, 'vault-ttml-import') : undefined;
-      if (trace) arrivalEvent(trace, 0, 'import-input-rn-received');
-      const parsed = trace ? arrivalSpan(trace, 0, 'parser', () => parseTtmlToLyrics(ttmlContent)) : parseTtmlToLyrics(ttmlContent);
-      if (trace && parsed.lyrics) linkArrival(parsed.lyrics, trace);`);
+      source = source.replace('      const parsed = parseTtmlToLyrics(ttmlContent);', `      const trace = typeof __DEV__ !== 'undefined' && __DEV__ ? arrivalDiagnostics?.beginArrival({}, 'vault-ttml-import') : undefined;
+      if (typeof __DEV__ !== 'undefined' && __DEV__ && trace) arrivalDiagnostics?.arrivalEvent(trace, 0, 'import-input-rn-received');
+      const parsed = typeof __DEV__ !== 'undefined' && __DEV__ && trace && arrivalDiagnostics ? arrivalDiagnostics.arrivalSpan(trace, 0, 'parser', () => parseTtmlToLyrics(ttmlContent)) : parseTtmlToLyrics(ttmlContent);
+      if (typeof __DEV__ !== 'undefined' && __DEV__ && trace && parsed.lyrics) arrivalDiagnostics?.linkArrival(parsed.lyrics, trace);`)
+        .replace(/^([ \t]+)console\.log\((?=\n[ \t]+`\[(?:lyrics-translate|bridge-lyrics)\])/gm,
+          (_, indent) => `${indent}if (${mobileDev}) console.log(`);
     }
     output = output.slice(0, start) + '\n' + source + '\n' + output.slice(end);
   }

@@ -30,7 +30,7 @@ async function getOnboardingCompleted(): Promise<boolean> {
     const value = await AsyncStorage.getItem(ONBOARDING_COMPLETED_KEY);
     return value === 'true';
   } catch {
-    console.warn('[BridgeProvider] Could not read onboarding completion');
+    if (__DEV__) console.warn('[BridgeProvider] Could not read onboarding completion');
     return false;
   }
 }
@@ -63,32 +63,35 @@ function inferDefaultBridgeUrl() {
     return `ws://${host}:3001`;
   }
 
-  const Constants = require('expo-constants').default;
-  const constantsAny = Constants as unknown as Record<string, unknown>;
-  const expoGoConfig = (constantsAny.expoGoConfig || {}) as Record<
-    string,
-    unknown
-  >;
-  const manifest = (constantsAny.manifest || {}) as Record<string, unknown>;
+  if (__DEV__) {
+    const Constants = require('expo-constants').default;
+    const constantsAny = Constants as unknown as Record<string, unknown>;
+    const expoGoConfig = (constantsAny.expoGoConfig || {}) as Record<
+      string,
+      unknown
+    >;
+    const manifest = (constantsAny.manifest || {}) as Record<string, unknown>;
 
-  const candidates = [
-    extractHost(expoGoConfig.debuggerHost),
-    extractHost(manifest.debuggerHost),
-    extractHost(Constants.expoConfig?.hostUri),
-    extractHost(constantsAny?.linkingUri),
-  ].filter(Boolean);
+    const candidates = [
+      extractHost(expoGoConfig.debuggerHost),
+      extractHost(manifest.debuggerHost),
+      extractHost(Constants.expoConfig?.hostUri),
+      extractHost(constantsAny?.linkingUri),
+    ].filter(Boolean);
 
-  const preferredPrivateHost = candidates.find((host) => isPrivateIpv4(host));
-  const host =
-    preferredPrivateHost ||
-    candidates.find(
-      (candidate) => candidate === 'localhost' || candidate === '127.0.0.1',
-    ) ||
-    '';
-  if (!host) {
-    return '';
+    const preferredPrivateHost = candidates.find((host) => isPrivateIpv4(host));
+    const host =
+      preferredPrivateHost ||
+      candidates.find(
+        (candidate) => candidate === 'localhost' || candidate === '127.0.0.1',
+      ) ||
+      '';
+    if (!host) {
+      return '';
+    }
+    return `ws://${host}:3001`;
   }
-  return `ws://${host}:3001`;
+  return '';
 }
 
 export function BridgeProvider({ children }: PropsWithChildren) {
@@ -139,7 +142,7 @@ export function BridgeProvider({ children }: PropsWithChildren) {
       try {
         await initPlaybackStoreDefaults();
       } catch {
-        if (active) console.warn('[BridgeProvider] Failed to load persisted playback settings');
+        if (__DEV__ && active) console.warn('[BridgeProvider] Failed to load persisted playback settings');
       }
       if (!active) return;
 
@@ -191,7 +194,7 @@ export function BridgeProvider({ children }: PropsWithChildren) {
         }
       } catch {
         if (!active) return;
-        console.warn(`[BridgeProvider] Setup restore failed while ${stage}`);
+        if (__DEV__) console.warn(`[BridgeProvider] Setup restore failed while ${stage}`);
         setShowOnboarding(true);
       } finally {
         if (active) setOnboardingChecked(true);

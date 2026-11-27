@@ -72,7 +72,8 @@
             "reactNativeReleaseLevel": "experimental"
           },
           "android": {
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": true,
+            "enableMinifyInReleaseBuilds": true
           }
         }
       ],

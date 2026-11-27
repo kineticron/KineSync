@@ -1,9 +1,14 @@
 import { Buffer } from 'buffer';
 import { ungzip } from 'pako';
 import { decodeCluster } from './binary';
-import { numericEvidence, timingAlias, timingCaptureActive, timingCaptureId, timingNow,
-  type ClockStamp, type TimingAnchor, type TimingContext } from './timing-diagnostics';
-import { developmentTimingActive, developmentTimingAnchor, logDevelopmentTiming, type DevelopmentTimingAnchor } from './development-timing-log';
+import { timingNow, type ClockStamp, type TimingContext } from './timing-clock';
+import type { TimingAnchor } from './timing-diagnostics';
+import type { DevelopmentTimingAnchor } from './development-timing-log';
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const timingDiagnostics = typeof __DEV__ !== 'undefined' && __DEV__ ? require('./timing-diagnostics') as typeof import('./timing-diagnostics') : null;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const developmentTimingLog = typeof __DEV__ !== 'undefined' && __DEV__ ? require('./development-timing-log') as typeof import('./development-timing-log') : null;
 
 export type Sample = { title: string; artist: string; album: string; artworkUrl: string; uri: string; positionMs: number; durationMs: number; playing: boolean; device: string; receivedAt: number; positionTimestampMs?: number; sourceServerTimestampMs?: number; positionObservedAt?: ClockStamp; activeDeviceId?: string; playbackSessionId?: string; sourceClockScope?: string; dealerDeliveryExcessMs?: number; timingProvenance?: TimingAnchor; developmentTiming?: DevelopmentTimingAnchor };
 
@@ -72,7 +77,7 @@ export function projectedPosition(sample: Sample, now: number, nowMonotonic = pe
     ? sample.dealerDeliveryExcessMs! : 0;
   const position = sample.positionMs + (sample.playing ? elapsed + deliveryExcess : 0);
   const result = sample.durationMs > 0 ? Math.min(position, sample.durationMs) : position;
-  logDevelopmentTiming('normalize', sample, { wallMs: now, monotonicMs: nowMonotonic, elapsedMs: elapsed,
+  if (typeof __DEV__ !== 'undefined' && __DEV__) developmentTimingLog?.logDevelopmentTiming('normalize', sample, { wallMs: now, monotonicMs: nowMonotonic, elapsedMs: elapsed,
     positionMs: result, clusterAgeMs: clusterAge });
   return result;
 }
@@ -178,24 +183,30 @@ export function sampleFrom(value: unknown, depth = 0, timing: TimingContext = {}
 }
 
 export function sampleWithContext(value: unknown, depth = 0, timing: TimingContext = {}): SelectedPlayerContext | null {
-  const capture = timingCaptureActive(), development = developmentTimingActive();
-  return parseSampleWithContext(value, depth, capture || development ? {
-    capture, development, context: timing, path: '$', serverPath: null,
-    receipt: timing.receipt ? Object.freeze({ ...timing.receipt }) : timingNow(), cluster: {}, device: undefined,
-  } : undefined);
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    const capture = timingDiagnostics?.timingCaptureActive() ?? false;
+    const development = developmentTimingLog?.developmentTimingActive() ?? false;
+    if (capture || development) {
+      return parseSampleWithContext(value, depth, {
+        capture, development, context: timing, path: '$', serverPath: null,
+        receipt: timing.receipt ? Object.freeze({ ...timing.receipt }) : timingNow(), cluster: {}, device: undefined,
+      });
+    }
+  }
+  return parseSampleWithContext(value, depth);
 }
 type Trace = { capture: boolean; development: boolean; context: TimingContext; path: string; serverPath: string | null; receipt: TimingAnchor['receipt']; cluster: Record<string, unknown>; device: unknown };
 // Schema keys only: arbitrary payload keys can contain account/device identifiers.
-const schemaKeys = new Set(['player_state', 'cluster', 'payloads', 'state', 'data', 'item']);
+const schemaKeys = typeof __DEV__ !== 'undefined' && __DEV__ ? new Set(['player_state', 'cluster', 'payloads', 'state', 'data', 'item']) : null;
 function parseSampleWithContext(value: unknown, depth: number, trace?: Trace): SelectedPlayerContext | null {
   if (depth > 9 || !value) return null;
   if (typeof value === 'string') { try { return parseSampleWithContext(JSON.parse(value), depth + 1, trace); } catch { return null; } }
   if (typeof value !== 'object') return null;
   const o = value as Record<string, any>;
-  if (trace && o.player_state) trace = { ...trace, cluster: o, serverPath: trace.path,
+  if (typeof __DEV__ !== 'undefined' && __DEV__ && trace && o.player_state) trace = { ...trace, cluster: o, serverPath: trace.path,
     device: o.active_device_id ?? o.activeDeviceId };
   if (o.player_state) {
-    const s = parseSampleWithContext(o.player_state, depth + 1, trace && { ...trace, path: `${trace.path}.player_state` });
+    const s = parseSampleWithContext(o.player_state, depth + 1, typeof __DEV__ !== 'undefined' && __DEV__ && trace ? { ...trace, path: `${trace.path}.player_state` } : undefined);
     if (s) {
       const id = o.active_device_id ?? o.activeDeviceId;
       const info = o.device?.[id] ?? o.devices?.[id];
@@ -219,44 +230,42 @@ function parseSampleWithContext(value: unknown, depth: number, trace?: Trace): S
   const playing = paused === true ? false : typeof o.is_playing === 'boolean' ? o.is_playing : typeof paused === 'boolean' ? !paused : undefined;
   if (track && Number.isFinite(position) && playing !== undefined) {
     const m = track.metadata ?? {};
-    const positionField = o.position_as_of_timestamp != null ? 'position_as_of_timestamp' : o.position != null ? 'position' : 'progress_ms';
-    const timingProvenance: TimingAnchor | undefined = trace?.capture ? Object.freeze({
-      capture: timingCaptureId(), schemaPath: trace.path, positionField,
-      rawPositionMs: numericEvidence(o[positionField]), rawTimestampMs: numericEvidence(o.timestamp),
-      sourceMonotonicMs: null, receipt: trace.receipt, parsed: timingNow(), origin: trace.context.origin ?? 'parser',
-      device: timingAlias('device', trace.device ?? o.device?.device_id), session: timingAlias('session', o.session_id),
-      connection: timingAlias('connection', trace.context.connectionId), generation: trace.context.generation ?? null,
-      clusterChangedMs: numericEvidence(trace.cluster.changed_timestamp_ms),
-      clusterServerMs: numericEvidence(trace.cluster.server_timestamp_ms),
-      clusterTransferMs: numericEvidence(trace.cluster.transfer_data_timestamp),
-      clusterStartedPlayingMs: numericEvidence(trace.cluster.started_playing_at_timestamp),
-    }) : undefined;
-    const developmentTiming = trace?.development ? developmentTimingAnchor({ playerPath: trace.path,
-      serverPath: trace.serverPath, positionField, position: o[positionField], player: o.timestamp,
-      server: trace.cluster.server_timestamp_ms, receipt: trace.receipt, origin: trace.context.origin ?? 'parser',
-      device: trace.device ?? o.device?.device_id, session: o.session_id, connection: trace.context.connectionId,
-      generation: trace.context.generation, state: o, cluster: trace.cluster }) : undefined;
-    return {
-      sample: {
-        title: track.name ?? m.title ?? 'Unknown track',
-        artist: track.artists?.map((a: any) => a.name).join(', ') || m.artist_name || m['artist_name:0'] || '',
-        album: track.album?.name ?? m.album_title ?? '',
-        artworkUrl: String(track.album?.images?.[0]?.url ?? m.image_xlarge_url ?? m.image_large_url ?? m.image_url ?? '').replace(/^spotify:image:/, 'https://i.scdn.co/image/'),
-        uri: track.uri ?? '', positionMs: Math.max(0, position),
-        durationMs: Number(o.duration ?? track.duration_ms ?? m.duration) || 0,
-        playing: playing && !o.loading && !o.is_buffering,
-        device: o.device?.name ?? o.device?.device_id ?? '', receivedAt: Date.now(),
-        positionTimestampMs: Number(o.timestamp) > 1_000_000_000_000 ? Number(o.timestamp) : undefined,
-        playbackSessionId: typeof o.session_id === 'string' && o.session_id ? o.session_id : undefined,
-        ...(timingProvenance ? { timingProvenance } : {}),
-        ...(developmentTiming ? { developmentTiming } : {}),
-      },
-      playerState: o,
+    const sample: Sample = {
+      title: track.name ?? m.title ?? 'Unknown track',
+      artist: track.artists?.map((a: any) => a.name).join(', ') || m.artist_name || m['artist_name:0'] || '',
+      album: track.album?.name ?? m.album_title ?? '',
+      artworkUrl: String(track.album?.images?.[0]?.url ?? m.image_xlarge_url ?? m.image_large_url ?? m.image_url ?? '').replace(/^spotify:image:/, 'https://i.scdn.co/image/'),
+      uri: track.uri ?? '', positionMs: Math.max(0, position),
+      durationMs: Number(o.duration ?? track.duration_ms ?? m.duration) || 0,
+      playing: playing && !o.loading && !o.is_buffering,
+      device: o.device?.name ?? o.device?.device_id ?? '', receivedAt: Date.now(),
+      positionTimestampMs: Number(o.timestamp) > 1_000_000_000_000 ? Number(o.timestamp) : undefined,
+      playbackSessionId: typeof o.session_id === 'string' && o.session_id ? o.session_id : undefined,
     };
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && trace) {
+      const positionField = o.position_as_of_timestamp != null ? 'position_as_of_timestamp' : o.position != null ? 'position' : 'progress_ms';
+      if (trace.capture && timingDiagnostics) sample.timingProvenance = Object.freeze({
+        capture: timingDiagnostics.timingCaptureId(), schemaPath: trace.path, positionField,
+        rawPositionMs: timingDiagnostics.numericEvidence(o[positionField]), rawTimestampMs: timingDiagnostics.numericEvidence(o.timestamp),
+        sourceMonotonicMs: null, receipt: trace.receipt, parsed: timingNow(), origin: trace.context.origin ?? 'parser',
+        device: timingDiagnostics.timingAlias('device', trace.device ?? o.device?.device_id), session: timingDiagnostics.timingAlias('session', o.session_id),
+        connection: timingDiagnostics.timingAlias('connection', trace.context.connectionId), generation: trace.context.generation ?? null,
+        clusterChangedMs: timingDiagnostics.numericEvidence(trace.cluster.changed_timestamp_ms),
+        clusterServerMs: timingDiagnostics.numericEvidence(trace.cluster.server_timestamp_ms),
+        clusterTransferMs: timingDiagnostics.numericEvidence(trace.cluster.transfer_data_timestamp),
+        clusterStartedPlayingMs: timingDiagnostics.numericEvidence(trace.cluster.started_playing_at_timestamp),
+      });
+      if (trace.development && developmentTimingLog) sample.developmentTiming = developmentTimingLog.developmentTimingAnchor({ playerPath: trace.path,
+        serverPath: trace.serverPath, positionField, position: o[positionField], player: o.timestamp,
+        server: trace.cluster.server_timestamp_ms, receipt: trace.receipt, origin: trace.context.origin ?? 'parser',
+        device: trace.device ?? o.device?.device_id, session: o.session_id, connection: trace.context.connectionId,
+        generation: trace.context.generation, state: o, cluster: trace.cluster });
+    }
+    return { sample, playerState: o };
   }
   for (const [key, v] of Object.entries(o)) {
-    const segment = Array.isArray(o) ? '[*]' : schemaKeys.has(key) ? `.${key}` : '.*';
-    const s = parseSampleWithContext(v, depth + 1, trace && { ...trace, path: trace.path + segment }); if (s) return s;
+    const segment = typeof __DEV__ !== 'undefined' && __DEV__ && trace ? (Array.isArray(o) ? '[*]' : schemaKeys?.has(key) ? `.${key}` : '.*') : '';
+    const s = parseSampleWithContext(v, depth + 1, typeof __DEV__ !== 'undefined' && __DEV__ && trace ? { ...trace, path: trace.path + segment } : undefined); if (s) return s;
   }
   return null;
 }

@@ -7,7 +7,7 @@ const ts = require('typescript');
 const code = ts.transpileModule(fs.readFileSync(path.resolve(__dirname,'../lib/bridge-client.ts'),'utf8'), {
   compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022},
 }).outputText;
-function harness() {
+function harness(development = true) {
   let now=0, next=0, ingested=0;
   const timers=new Map(), sockets=[];
   const state={serverUrl:'ws://localhost:3001',handshakeKey:'fixture',simulatedLatencyMs:0,packetDropRate:0,
@@ -20,7 +20,7 @@ function harness() {
     event(data){this.onmessage?.({data:JSON.stringify(data)});}
   }
   const module={exports:{}};
-  vm.runInNewContext(code,{module,exports:module.exports,WebSocket:Socket,Math,Date,
+  vm.runInNewContext(code,{module,exports:module.exports,WebSocket:Socket,Math,Date,__DEV__:development,
     setTimeout:(fn,ms)=>{timers.set(++next,{fn,at:now+ms});return next;},clearTimeout:id=>timers.delete(id),
     require:name=>({
       '@/store/playback-store':{usePlaybackStore:{getState:()=>state},startPlaybackClock(){},stopPlaybackClock(){}},
@@ -36,6 +36,13 @@ function harness() {
   };
 }
 async function main(){
+  const release = harness(false);
+  release.state.simulatedLatencyMs = 100;
+  release.state.packetDropRate = 1;
+  release.client.connect();
+  release.authenticate().event({ type: 'playback', trackId: 'release' });
+  assert.equal(release.ingested, 1, 'Release applies playback immediately despite injected simulation settings');
+  release.client.disconnect();
   const h=harness();
   h.client.connect();h.authenticate().onclose();
   assert.equal(h.timers.size,1);

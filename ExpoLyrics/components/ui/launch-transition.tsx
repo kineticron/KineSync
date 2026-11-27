@@ -13,7 +13,7 @@ import { LaunchVisibilityContext } from './launch-visibility';
 
 // Runs before the root mounts. Android hands over once the launch shell has layout.
 void SplashScreen.preventAutoHideAsync().catch(() => {
-  console.warn('[LaunchTransition] Native splash hold failed');
+  if (typeof __DEV__ !== 'undefined' && __DEV__) console.warn('[LaunchTransition] Native splash hold failed');
 });
 
 const REVEAL_MS = 1000;
@@ -124,7 +124,7 @@ export function LaunchTransition({ ready, children }: PropsWithChildren<{ ready:
         SplashScreen.hide();
         release.acknowledged = true;
       } catch {
-        console.warn(`[LaunchTransition] Native splash release failed (attempt ${attempt} of 2)`);
+        if (typeof __DEV__ !== 'undefined' && __DEV__) console.warn(`[LaunchTransition] Native splash release failed (attempt ${attempt} of 2)`);
         if (attempt === 1) {
           splashRetry = setTimeout(() => {
             splashRetry = undefined;

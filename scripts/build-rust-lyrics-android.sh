@@ -5,6 +5,13 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 crate="${root}/native/lyrics-renderer"
 output="${root}/ExpoLyrics/modules/kinesync-rust-lyrics/android/src/main/jniLibs"
+build_kind="${KINESYNC_BUILD_KIND:-release}"
+features=()
+case "${build_kind}" in
+  development) features=(--features dev-render-metrics) ;;
+  release) ;;
+  *) echo "Invalid KINESYNC_BUILD_KIND: ${build_kind}" >&2; exit 2 ;;
+esac
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${crate}/target}"
 # Cargo resolves relative target directories from its working directory.
 cd "${root}"
@@ -57,12 +64,13 @@ for i in "${!abis[@]}"; do
   abi="${abis[$i]}"
   triple="${triples[$i]}"
   cargo +1.97.0 ndk --target "${abi}" --platform 24 \
-    build --manifest-path "${crate}/Cargo.toml" --lib --release --locked
+    build --manifest-path "${crate}/Cargo.toml" --lib --release --locked "${features[@]}"
   archive="${CARGO_TARGET_DIR}/${triple}/release/liblyrics_renderer.a"
   if [[ ! -s "${archive}" ]]; then
     echo "Missing Rust static archive for ${abi}: ${archive}" >&2
     exit 1
   fi
+  node "${root}/scripts/check-release-diagnostics.cjs" rust-archive "${archive}" "${build_kind}"
   # cargo-ndk's -o copies shared libraries, not this crate's staticlib.
   mkdir -p "${output}/${abi}"
   cp "${archive}" "${output}/${abi}/liblyrics_renderer.a"

@@ -82,8 +82,11 @@ FN(jint, render)(JNIEnv *, jobject, jlong p, jdouble target, jdouble sampled, jd
   return kr_render(owner(p)->handle, target, sampled, resume);
 }
 
-// Fixed slot order, mirrored by RustBridge.M_* in Kotlin.
-FN(jboolean, fillMetrics)(JNIEnv *env, jobject, jlong p, jdoubleArray out) {
+#define FRAME_FN(name) extern "C" JNIEXPORT jboolean JNICALL Java_dev_kineticron_rustlyrics_FrameSample_##name
+
+#if KINESYNC_ANDROID_FRAME_DIAGNOSTICS
+// Fixed slot order, mirrored by the Debug FrameSample.
+FRAME_FN(fillMetrics)(JNIEnv *env, jobject, jlong p, jdoubleArray out) {
   constexpr jsize slotCount = 23;
   if (!p || !out || env->GetArrayLength(out) < slotCount) return JNI_FALSE;
   KRMetrics m{};
@@ -99,7 +102,9 @@ FN(jboolean, fillMetrics)(JNIEnv *env, jobject, jlong p, jdoubleArray out) {
   return JNI_TRUE;
 }
 
-FN(jbyteArray, copyLayout)(JNIEnv *env, jobject, jlong p) {
+#define FRAME_DEBUG_FN(type, name) extern "C" JNIEXPORT type JNICALL Java_dev_kineticron_rustlyrics_FrameSample_##name
+
+FRAME_DEBUG_FN(jbyteArray, copyLayout)(JNIEnv *env, jobject, jlong p) {
   uint64_t h = owner(p)->handle;
   size_t capacity = kr_copy_layout_json(h, nullptr, 0);
   if (capacity == 0 || capacity > 8000000) return nullptr;
@@ -114,11 +119,23 @@ FN(jbyteArray, copyLayout)(JNIEnv *env, jobject, jlong p) {
   return out;
 }
 
-FN(jstring, lastError)(JNIEnv *env, jobject) {
+FRAME_DEBUG_FN(jstring, lastError)(JNIEnv *env, jobject) {
   char buffer[2048] = {0};
   kr_copy_error(buffer, sizeof(buffer));
   return env->NewStringUTF(buffer);
 }
+
+#else
+FRAME_FN(fillFrameState)(JNIEnv *env, jobject, jlong p, jdoubleArray out) {
+  constexpr jsize slotCount = 2;
+  if (!p || !out || env->GetArrayLength(out) < slotCount) return JNI_FALSE;
+  KRMetrics m{};
+  if (kr_metrics(owner(p)->handle, &m) < 0) return JNI_FALSE;
+  const double v[] = {(double)m.animating, m.next_cue_native_ms};
+  env->SetDoubleArrayRegion(out, 0, slotCount, v);
+  return JNI_TRUE;
+}
+#endif
 
 // kr_destroy first, then the window pin is dropped.
 FN(jint, destroy)(JNIEnv *, jobject, jlong p) {

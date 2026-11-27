@@ -39,6 +39,7 @@ impl VisualCues {
 
 #[derive(Debug)]
 pub(crate) struct FrameSchedule {
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     pub visible_changes: bool,
     pub continuous: bool,
     pub next_cue: Option<f64>,

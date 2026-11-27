@@ -118,19 +118,25 @@ pub struct TrackScene {
     pub width: u32,
     pub height: u32,
     pub font_size: f64,
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     pub glyph_count: usize,
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     pub missing_glyphs: usize,
     prefix: RowOffsets,
     interludes: Vec<(usize, crate::interlude::Interlude)>,
     timing: TimingIndex,
     pub(crate) dot_glyph: Option<crate::interlude::DotGlyph>,
     /// Last explicitly requested receipts. Unprepared or evicted rows are null.
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     pub diagnostics: Vec<serde_json::Value>,
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     diagnostics_json: Option<Vec<u8>>,
     fonts: Option<crate::typography::Fonts>,
     settings: Option<crate::typography::Settings>,
     pub(crate) scale: f32,
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     pub plain_preparations: usize,
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     pub detailed_preparations: usize,
     pub(crate) footer: Option<crate::credits::Footer>,
     prepared_signature: Option<PreparationKey>,
@@ -607,8 +613,17 @@ impl TrackScene {
         fonts: &mut crate::typography::Fonts,
     ) -> Result<Self, Error> {
         let Some(settings) = settings else {
-            let mut track =
-                Self::with_fonts_eager(lines, width, height, scale, None, fonts, true, false)?;
+            let mut track = Self::with_fonts_eager(
+                lines,
+                width,
+                height,
+                scale,
+                None,
+                fonts,
+                true,
+                #[cfg(any(test, feature = "dev-render-metrics"))]
+                false,
+            )?;
             track.fonts = Some(fonts.clone());
             track.cues = crate::scheduling::VisualCues::new(&track.lines);
             return Ok(track);
@@ -664,7 +679,8 @@ impl TrackScene {
             cached_line.voices.shrink_to_fit();
             cached.push(cached_line);
         }
-        let count = lines.len();
+        #[cfg(any(test, feature = "dev-render-metrics"))]
+        let diagnostics = vec![serde_json::Value::Null; lines.len()];
         let cues = crate::scheduling::VisualCues::new(&lines);
         let interludes = crate::interlude::slots(&lines)
             .into_iter()
@@ -692,16 +708,22 @@ impl TrackScene {
             width,
             height,
             font_size: f64::from(primary_size),
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             glyph_count: 0,
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             missing_glyphs: 0,
             interludes,
             dot_glyph,
-            diagnostics: vec![serde_json::Value::Null; count],
+            #[cfg(any(test, feature = "dev-render-metrics"))]
+            diagnostics,
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             diagnostics_json: None,
             fonts: Some(fonts.clone()),
             settings: Some(settings.clone()),
             scale,
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             plain_preparations: 0,
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             detailed_preparations: 0,
             footer,
             prepared_signature: None,
@@ -780,22 +802,29 @@ impl TrackScene {
                     self.settings.as_ref(),
                     self.fonts.as_mut().expect("lazy fonts"),
                     detailed,
+                    #[cfg(any(test, feature = "dev-render-metrics"))]
                     false,
                 )?;
-                self.glyph_count += prepared.glyph_count;
-                self.missing_glyphs += prepared.missing_glyphs;
                 let measured = prepared.cached.remove(0);
                 if measured.height != self.cached[i].height {
                     self.prefix.add(i, measured.height - self.cached[i].height);
                 }
                 self.cached[i] = measured;
                 self.resident.insert(i);
-                self.diagnostics[i] = prepared.diagnostics.remove(0);
-                self.diagnostics_json = None;
-                self.plain_preparations += 1;
-                self.detailed_preparations += usize::from(detailed);
+                #[cfg(any(test, feature = "dev-render-metrics"))]
+                {
+                    self.glyph_count += prepared.glyph_count;
+                    self.missing_glyphs += prepared.missing_glyphs;
+                    self.diagnostics[i] = prepared.diagnostics.remove(0);
+                    self.diagnostics_json = None;
+                    self.plain_preparations += 1;
+                    self.detailed_preparations += usize::from(detailed);
+                }
             } else if detailed && !self.cached[i].lead().detailed {
-                self.detailed_preparations += 1;
+                #[cfg(any(test, feature = "dev-render-metrics"))]
+                {
+                    self.detailed_preparations += 1;
+                }
                 let line = &self.lines[i];
                 for (index, voice) in self.cached[i].voices.iter_mut().enumerate() {
                     if voice.atoms.is_empty() {
@@ -841,8 +870,11 @@ impl TrackScene {
                 for voice in voices {
                     voice.clear_geometry();
                 }
-                self.diagnostics[i] = serde_json::Value::Null;
-                self.diagnostics_json = None;
+                #[cfg(any(test, feature = "dev-render-metrics"))]
+                {
+                    self.diagnostics[i] = serde_json::Value::Null;
+                    self.diagnostics_json = None;
+                }
             }
             keep
         });
@@ -877,19 +909,23 @@ impl TrackScene {
                     self.settings.as_ref(),
                     self.fonts.as_mut().expect("lazy fonts"),
                     false,
+                    #[cfg(any(test, feature = "dev-render-metrics"))]
                     false,
                 )?;
-                self.glyph_count += prepared.glyph_count;
-                self.missing_glyphs += prepared.missing_glyphs;
                 let measured = prepared.cached.remove(0);
                 if measured.height != self.cached[i].height {
                     self.prefix.add(i, measured.height - self.cached[i].height);
                 }
                 self.cached[i] = measured;
                 self.resident.insert(i);
-                self.diagnostics[i] = prepared.diagnostics.remove(0);
-                self.diagnostics_json = None;
-                self.plain_preparations += 1;
+                #[cfg(any(test, feature = "dev-render-metrics"))]
+                {
+                    self.glyph_count += prepared.glyph_count;
+                    self.missing_glyphs += prepared.missing_glyphs;
+                    self.diagnostics[i] = prepared.diagnostics.remove(0);
+                    self.diagnostics_json = None;
+                    self.plain_preparations += 1;
+                }
             }
         }
         // Bound retained manual-scroll geometry while keeping playback's cache.
@@ -905,8 +941,11 @@ impl TrackScene {
                 for voice in &mut self.cached[i].voices {
                     voice.clear_geometry();
                 }
-                self.diagnostics[i] = serde_json::Value::Null;
-                self.diagnostics_json = None;
+                #[cfg(any(test, feature = "dev-render-metrics"))]
+                {
+                    self.diagnostics[i] = serde_json::Value::Null;
+                    self.diagnostics_json = None;
+                }
             }
             keep
         });
@@ -939,7 +978,7 @@ impl TrackScene {
         settings: Option<&crate::typography::Settings>,
         fonts: &mut crate::typography::Fonts,
         detailed: bool,
-        collect_diagnostics: bool,
+        #[cfg(any(test, feature = "dev-render-metrics"))] collect_diagnostics: bool,
     ) -> Result<Self, Error> {
         if lines.is_empty()
             || width == 0
@@ -955,8 +994,11 @@ impl TrackScene {
         let mut layouts = LayoutContext::<()>::new();
         let font_size = 34.0 * scale;
         let mut cached = Vec::new();
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let mut glyph_count = 0;
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let mut missing_glyphs = 0;
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let mut diagnostics = Vec::new();
         for line in &lines {
             if settings.is_some() && line.paint.is_none() {
@@ -964,6 +1006,7 @@ impl TrackScene {
             }
             let boxes = row_voice_boxes(line, width, height, scale, settings, font_size);
             let mut voices = Vec::with_capacity(boxes.len());
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             let mut voice_diagnostics = Vec::new();
             // Row content grows by each voice's own margin and padding box, so a
             // background voice is part of the measured line height used by
@@ -1069,11 +1112,13 @@ impl TrackScene {
                 let mut white = Scene::new();
                 let mut plain = Scene::new();
                 let mut atoms = Vec::new();
+                #[cfg(any(test, feature = "dev-render-metrics"))]
                 let mut faces = Vec::new();
                 for row in layout.lines() {
                     for item in row.items() {
                         if let PositionedLayoutItem::GlyphRun(gr) = item {
                             let run = gr.run();
+                            #[cfg(any(test, feature = "dev-render-metrics"))]
                             if collect_diagnostics {
                                 let face = fonts.describe(run.font());
                                 faces.push(serde_json::json!({"face":face,"text_bytes":[run.text_range().start,run.text_range().end],
@@ -1083,8 +1128,11 @@ impl TrackScene {
                             let glyphs: Vec<Glyph> = gr
                                 .positioned_glyphs()
                                 .map(|g| {
-                                    glyph_count += 1;
-                                    missing_glyphs += usize::from(g.id == 0);
+                                    #[cfg(any(test, feature = "dev-render-metrics"))]
+                                    {
+                                        glyph_count += 1;
+                                        missing_glyphs += usize::from(g.id == 0);
+                                    }
                                     Glyph {
                                         id: g.id,
                                         x: g.x,
@@ -1147,11 +1195,15 @@ impl TrackScene {
                         f64::from(voice_box.padding) + content_height,
                         fonts,
                         &mut layouts,
+                        #[cfg(any(test, feature = "dev-render-metrics"))]
                         collect_diagnostics,
                         line.voice(index),
                     );
-                    glyph_count += t.glyph_count;
-                    missing_glyphs += t.missing_glyphs;
+                    #[cfg(any(test, feature = "dev-render-metrics"))]
+                    {
+                        glyph_count += t.glyph_count;
+                        missing_glyphs += t.missing_glyphs;
+                    }
                     Some(t)
                 } else {
                     None
@@ -1196,6 +1248,7 @@ impl TrackScene {
                     background: voice_box.background,
                 };
                 cursor = voice.offset + voice.box_height();
+                #[cfg(any(test, feature = "dev-render-metrics"))]
                 if collect_diagnostics {
                     voice_diagnostics.push(serde_json::json!({"geometry":voice_box.geometry,"text":text,
                 "voice_height":voice.height,"background":voice_box.background,"offset":voice.offset,
@@ -1227,17 +1280,20 @@ impl TrackScene {
             } else {
                 (cursor, 0.0)
             };
-            let mut row = voice_diagnostics
-                .first()
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            if let Some(fields) = row.as_object_mut() {
-                fields.insert("height".into(), serde_json::json!(height));
-                fields.insert("content_top".into(), serde_json::json!(top));
-                fields.insert("content_height".into(), serde_json::json!(cursor));
-                fields.insert("voices".into(), serde_json::Value::Array(voice_diagnostics));
+            #[cfg(any(test, feature = "dev-render-metrics"))]
+            {
+                let mut row = voice_diagnostics
+                    .first()
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                if let Some(fields) = row.as_object_mut() {
+                    fields.insert("height".into(), serde_json::json!(height));
+                    fields.insert("content_top".into(), serde_json::json!(top));
+                    fields.insert("content_height".into(), serde_json::json!(cursor));
+                    fields.insert("voices".into(), serde_json::Value::Array(voice_diagnostics));
+                }
+                diagnostics.push(row);
             }
-            diagnostics.push(row);
             cached.push(CachedLine {
                 voices,
                 height,
@@ -1273,17 +1329,23 @@ impl TrackScene {
             width,
             height,
             font_size: font_size as f64,
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             glyph_count,
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             missing_glyphs,
             interludes,
             // Scratch row preparation does not own the interlude renderer.
             dot_glyph: None,
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             diagnostics,
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             diagnostics_json: None,
             fonts: None,
             settings: None,
             scale,
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             plain_preparations: 0,
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             detailed_preparations: 0,
             footer: None,
             prepared_signature: None,
@@ -1296,6 +1358,7 @@ impl TrackScene {
 
     /// Materialize layout receipts only on request. The owned byte snapshot is
     /// reused by the C ABI's size query and copy until row residency changes.
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     pub fn layout_json(&mut self) -> Result<&[u8], Error> {
         if self.diagnostics_json.is_none() {
             let mut fonts = None;
@@ -1979,6 +2042,7 @@ impl TrackScene {
                             && time <= self.lines[i].background_end
                     })));
         crate::scheduling::FrameSchedule {
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             visible_changes,
             continuous: visible_changes || retained_changes,
             next_cue,

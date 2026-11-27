@@ -14,7 +14,16 @@ panic = "unwind"
 panic = "unwind"
 
 [features]
-dev-frame-trace = []
+dev-render-metrics = []
+dev-frame-trace = ["dev-render-metrics"]
+
+[[example]]
+name = "frame-bench"
+required-features = ["dev-render-metrics"]
+
+[[example]]
+name = "parity-capture"
+required-features = ["dev-render-metrics"]
 
 [dependencies]
 vello = "=0.12.0"

@@ -15,7 +15,6 @@ import expo.modules.kotlin.Promise
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
 import org.json.JSONObject
-import kotlin.math.ceil
 
 /**
  * Parity port of the Swift view. TextureView hosts a transparent Vulkan surface,
@@ -24,10 +23,11 @@ import kotlin.math.ceil
 class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoView(context, appContext),
   TextureView.SurfaceTextureListener, Choreographer.FrameCallback {
   private val onStatus by EventDispatcher<Map<String, Any?>>()
-  private val onMetrics by EventDispatcher<Map<String, Any?>>()
+  private val frameObserver = if (BuildConfig.DEBUG) FrameObserver(this) else null
   private val main = Handler(Looper.getMainLooper())
   private val textureView = TextureView(context)
-  private var owner: RustOwner? = null
+  internal var owner: RustOwner? = null
+    private set
   private var texture: SurfaceTexture? = null
 
   private var session = 0L
@@ -67,25 +67,6 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   private var cueWork: Runnable? = null
   private var cueDeadline = -1.0
   private var callbackPosted = false
-
-  private var callbacks = 0L
-  private var submitted = 0L
-  private var idle = 0L
-  private var busyCallbacks = 0L
-  private var inactive = 0L
-  private var noDrawable = 0L
-  private var presentCalls = 0L
-  private var missedEstimate = 0L
-  private var windowStart = 0.0
-  private var windowCallbacks = 0L
-  private var windowPresent = 0L
-  private var windowBusy = 0L
-  private var windowMissed = 0L
-  private var previousFrameNs = 0L
-  private var previousStepNs = 0L
-  private var tickMs = 0.0
-  private var intervalMs = 0.0
-  private var requestedHz = 0.0
 
   // Gesture state. Rust takes logical (dp) units.
   private var velocity: VelocityTracker? = null
@@ -216,29 +197,16 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
 
   private fun handleEvent(event: Map<String, Any?>, epoch: Long) {
     if (session != epoch || (event["generation"] as? Long) != generation) return
-    if (event["state"] == "metrics") {
-      val elapsed = RustBridge.nowMs() / 1000 - windowStart
-      if (elapsed < 1) return
-      val m = HashMap(event)
-      m["uiTickMs"] = tickMs; m["displayIntervalMs"] = intervalMs
-      m["callbackTotal"] = callbacks; m["submitted"] = submitted; m["idle"] = idle; m["busy"] = busyCallbacks
-      m["inactive"] = inactive; m["noDrawable"] = noDrawable; m["missedObservedIntervalsEstimate"] = missedEstimate
-      m["requestedHz"] = requestedHz; m["windowSeconds"] = elapsed
-      m["deliveredCallbackHz"] = (callbacks - windowCallbacks) / elapsed
-      m["busyCallbacksInWindow"] = busyCallbacks - windowBusy
-      m["missedIntervalsInWindow"] = missedEstimate - windowMissed
-      m["presentCallRate"] = (presentCalls - windowPresent) / elapsed
-      windowStart = RustBridge.nowMs() / 1000
-      windowCallbacks = callbacks; windowPresent = presentCalls; windowBusy = busyCallbacks; windowMissed = missedEstimate
-      onMetrics(m)
-    } else {
-      if (event["state"] == "error") {
-        failed = true; updatePresentationVisibility()
-        Choreographer.getInstance().removeFrameCallback(this); callbackPosted = false
-      }
-      if (event["state"] == "ready") { markDirty(); lifecycle() }
-      onStatus(event)
+    if (BuildConfig.DEBUG && event["state"] == "metrics") {
+      frameObserver?.emit(event)
+      return
     }
+    if (event["state"] == "error") {
+      failed = true; updatePresentationVisibility()
+      Choreographer.getInstance().removeFrameCallback(this); callbackPosted = false
+    }
+    if (event["state"] == "ready") { markDirty(); lifecycle() }
+    onStatus(event)
   }
 
   fun setTrack(value: String) {
@@ -259,10 +227,6 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     }
     failed = false; updatePresentationVisibility()
     track = value; markDirty(); refresh(); lifecycle()
-  }
-  fun copyLayout(promise: Promise) {
-    val o = owner ?: return promise.reject("ERR_RUST_LAYOUT", "Rust owner unavailable", null)
-    o.copyLayout { r -> if (r != null) promise.resolve(r) else promise.reject("ERR_RUST_LAYOUT", "No prepared Rust layout receipt", null) }
   }
   fun setAnchor(value: String) {
     val next = try {
@@ -388,16 +352,13 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     if (visible && retryWork == null && !retryBlocked && (dirty || animating)) {
       cancelCue()
       if (!callbackPosted) {
-        val hz = display?.refreshRate?.toDouble() ?: 60.0
-        requestedHz = hz
-        windowStart = RustBridge.nowMs() / 1000
-        windowCallbacks = callbacks; windowPresent = presentCalls; windowBusy = busyCallbacks; windowMissed = missedEstimate
+        if (BuildConfig.DEBUG) frameObserver?.start(display?.refreshRate?.toDouble() ?: 60.0)
         callbackPosted = true
         Choreographer.getInstance().postFrameCallback(this)
       }
     } else {
       Choreographer.getInstance().removeFrameCallback(this); callbackPosted = false
-      previousFrameNs = 0; previousStepNs = 0
+      if (BuildConfig.DEBUG) frameObserver?.reset()
       if (visible && !busy && retryWork == null && !retryBlocked) {
         resumePending = anchor?.playing == true && (anchor?.rate ?: 0.0) > 0
         scheduleCue()
@@ -432,26 +393,40 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
 
   override fun doFrame(frameTimeNanos: Long) {
     callbackPosted = false
-    val start = System.nanoTime()
-    try { tick(frameTimeNanos) } finally { tickMs = (System.nanoTime() - start) / 1e6 }
+    if (BuildConfig.DEBUG) {
+      val start = System.nanoTime()
+      try { tick(frameTimeNanos) } finally { frameObserver?.finishTick(start) }
+    } else {
+      tick(frameTimeNanos)
+    }
   }
 
   private fun tick(frameNs: Long) {
-    callbacks++
-    if (!attached || !foreground || !enabled || failed || retryBlocked || retryWork != null) { inactive++; lifecycle(); return }
-    if (previousFrameNs > 0) {
-      val gap = frameNs - previousFrameNs
-      intervalMs = gap / 1e6
-      if (previousStepNs > 0) missedEstimate += maxOf(0.0, Math.rint(gap.toDouble() / previousStepNs) - 1).toLong()
+    if (BuildConfig.DEBUG) frameObserver?.callback()
+    if (!attached || !foreground || !enabled || failed || retryBlocked || retryWork != null) {
+      if (BuildConfig.DEBUG) frameObserver?.inactive()
+      lifecycle()
+      return
     }
-    previousFrameNs = frameNs
     val periodNs = (1e9 / (display?.refreshRate?.toDouble() ?: 60.0)).toLong()
-    previousStepNs = periodNs
+    if (BuildConfig.DEBUG) frameObserver?.interval(frameNs, periodNs)
     // Keep the loop alive for the next vsync while work is pending.
-    if (busy) { busyCallbacks++; repost(); return }
-    if (!dirty && !animating) { idle++; lifecycle(); return }
-    val o = owner ?: run { inactive++; return }
-    busy = true; dirty = false; submitted++
+    if (busy) {
+      if (BuildConfig.DEBUG) frameObserver?.busy()
+      repost()
+      return
+    }
+    if (!dirty && !animating) {
+      if (BuildConfig.DEBUG) frameObserver?.idle()
+      lifecycle()
+      return
+    }
+    val o = owner ?: run {
+      if (BuildConfig.DEBUG) frameObserver?.inactive()
+      return
+    }
+    busy = true; dirty = false
+    if (BuildConfig.DEBUG) frameObserver?.submit()
     val epoch = session
     val requestedRevision = frameRevision
     val resumeStepMs = if (resumePending) periodNs / 1e6 else 0.0
@@ -467,8 +442,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   private fun onFrame(r: FrameResult, epoch: Long, requestedRevision: Long, resumeStepMs: Double) {
     if (session != epoch) return
     busy = false
-    if (r.status == 0) presentCalls++
-    if (r.status == 2) noDrawable++
+    if (BuildConfig.DEBUG) frameObserver?.result(r.status)
     if (r.status == 3) dirty = true
     if (frameRevision != requestedRevision || r.generation != generation) { lifecycle(); return }
     animating = r.animating

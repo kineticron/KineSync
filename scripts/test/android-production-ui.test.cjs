@@ -68,8 +68,10 @@ test('Robo targets the player style radios and checks Advanced without editing A
   assert.match(explore, /secureTextEntry=\{secureTextEntry\}/);
   assert.deepEqual(
     [...advancedBody.matchAll(/<FieldRow\s+label="([^"]+)"[^>]*\bsecureTextEntry\s*\/>/g)].map(([, label]) => label),
-    ['Spotify Bearer Token', 'Musixmatch User API Token (Manual Override)', 'Gemini API Key'],
+    ['Musixmatch User API Token (Manual Override)', 'Gemini API Key'],
   );
+  assert.doesNotMatch(advancedBody, /Spotify Bearer Token|Lyrics renderer|Use Skia/);
+  assert.match(explore, /const useSpotifyTokenOverride = __DEV__ \? function useSpotifyTokenOverride\(\) \{[\s\S]*?label="Spotify Bearer Token"[\s\S]*?\} : \(\) => \(\{[^\n]*field: null/);
   const saveLabel = advancedBody.match(/accessibilityRole="button"\s+accessibilityLabel="([^"]+)"\s+onPress=\{saveMobileLyricsApiSettings\}/)[1];
   const saveTarget = [{ className: button, contentDescription: saveLabel }];
   const saveScroll = actions.findIndex(action => action.eventType === scrollIntoView

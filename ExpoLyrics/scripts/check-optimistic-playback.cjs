@@ -423,7 +423,7 @@ function bridgeHarness() {
   const tour = fakeStore({ active: false, pending: false });
   const shared = {
     setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, performance: { now: clock.now },
-    WebSocket: Socket,
+    WebSocket: Socket, __DEV__: true,
   };
   const playbackStore = { usePlaybackStore: playback, startPlaybackClock() {}, stopPlaybackClock() {} };
   const appState = {

@@ -4,20 +4,10 @@
 // Usage: node scripts/verify-spotify-browser-metadata.js
 
 const assert = require("node:assert");
-const fs = require("node:fs");
-const path = require("node:path");
-
-const source = fs.readFileSync(
-  path.join(__dirname, "..", "lib", "spotify-browser.ts"),
-  "utf8",
-);
-const marker = "export const installBrowserControlScript = String.raw`";
-const start = source.indexOf(marker);
-assert.ok(start >= 0, "installBrowserControlScript not found");
-const bodyStart = start + marker.length;
-const bodyEnd = source.indexOf("`;", bodyStart);
-assert.ok(bodyEnd > bodyStart, "unterminated installBrowserControlScript");
-const script = source.slice(bodyStart, bodyEnd);
+const loadSpotifyBrowser = require("./load-spotify-browser.cjs");
+const { installBrowserControlScript: script, installBrowserControlPreludeScript: prelude } = loadSpotifyBrowser(false);
+assert.doesNotMatch(script, /readDiagnostics|connectError|safeWindowGlobals/);
+assert.doesNotMatch(prelude, /setPositionStateCalls|lastSetPositionStateAtMs/);
 
 function element({ text = "", href = "", children = {} } = {}) {
   const node = {

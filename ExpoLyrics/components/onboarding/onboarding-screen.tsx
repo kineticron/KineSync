@@ -75,32 +75,35 @@ function inferDefaultBridgeUrl() {
     return `ws://${host}:3001`;
   }
 
-  const Constants = require("expo-constants").default;
-  const constantsAny = Constants as unknown as Record<string, unknown>;
-  const expoGoConfig = (constantsAny.expoGoConfig || {}) as Record<
-    string,
-    unknown
-  >;
-  const manifest = (constantsAny.manifest || {}) as Record<string, unknown>;
+  if (__DEV__) {
+    const Constants = require("expo-constants").default;
+    const constantsAny = Constants as unknown as Record<string, unknown>;
+    const expoGoConfig = (constantsAny.expoGoConfig || {}) as Record<
+      string,
+      unknown
+    >;
+    const manifest = (constantsAny.manifest || {}) as Record<string, unknown>;
 
-  const candidates = [
-    extractHost(expoGoConfig.debuggerHost),
-    extractHost(manifest.debuggerHost),
-    extractHost(Constants.expoConfig?.hostUri),
-    extractHost(constantsAny?.linkingUri),
-  ].filter(Boolean);
+    const candidates = [
+      extractHost(expoGoConfig.debuggerHost),
+      extractHost(manifest.debuggerHost),
+      extractHost(Constants.expoConfig?.hostUri),
+      extractHost(constantsAny?.linkingUri),
+    ].filter(Boolean);
 
-  const preferredPrivateHost = candidates.find((host) => isPrivateIpv4(host));
-  const host =
-    preferredPrivateHost ||
-    candidates.find(
-      (candidate) => candidate === "localhost" || candidate === "127.0.0.1",
-    ) ||
-    "";
-  if (!host) {
-    return "";
+    const preferredPrivateHost = candidates.find((host) => isPrivateIpv4(host));
+    const host =
+      preferredPrivateHost ||
+      candidates.find(
+        (candidate) => candidate === "localhost" || candidate === "127.0.0.1",
+      ) ||
+      "";
+    if (!host) {
+      return "";
+    }
+    return `ws://${host}:3001`;
   }
-  return `ws://${host}:3001`;
+  return '';
 }
 
 type IoniconName = ComponentProps<typeof Ionicons>["name"];
@@ -346,17 +349,13 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
               closeScanner();
               bridgeClient.reconnectNow();
             })
-            .catch((error) => {
+            .catch(() => {
               // A rejected QR write is no longer an accepted completion input,
               // even if Finish closed the scanner while waiting for it.
               if (pendingQrSave.current?.promise === promise) pendingQrSave.current = null;
               if (run !== setupGeneration.current || !scannerSession.isCurrent(scanRun)) return;
               scanHandled.current = false;
-              setScanError(
-                error instanceof Error
-                  ? error.message
-                  : "Could not save bridge settings.",
-              );
+              setScanError("Couldn’t save bridge settings. Try scanning again.");
             });
           return;
         }
@@ -433,8 +432,8 @@ function OnboardingScreen({ onDismiss }: { onDismiss: () => void }) {
       if (phone) bridgeClient.disconnect();
       else bridgeClient.reconnectNow();
       onDismiss();
-    } catch (error) {
-      if (run === setupGeneration.current) Alert.alert("Could not save setup", error instanceof Error ? error.message : "Please try again.");
+    } catch {
+      if (run === setupGeneration.current) Alert.alert("Couldn’t save setup", "Please try again.");
     } finally {
       if (run === setupGeneration.current) setupSaving.current = false;
     }

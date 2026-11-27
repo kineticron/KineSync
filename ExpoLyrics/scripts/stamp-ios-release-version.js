@@ -6,7 +6,7 @@ const runNumber = process.argv[3];
 if (!/^\d+\.\d+\.\d+$/.test(releaseVersion || '')) {
   throw new Error('Expected a three-component release version.');
 }
-if (!/^\d+$/.test(runNumber || '') || Number(runNumber) < 1) {
+if (!/^[1-9]\d*$/.test(runNumber || '') || !Number.isSafeInteger(Number(runNumber))) {
   throw new Error('Expected a positive GitHub Actions run number.');
 }
 

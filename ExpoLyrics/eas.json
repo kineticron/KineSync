@@ -16,7 +16,10 @@
       }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "KINESYNC_BUILD_KIND": "release"
+      }
     }
   },
   "submit": {

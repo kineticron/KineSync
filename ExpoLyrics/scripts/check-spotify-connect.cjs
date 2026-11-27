@@ -1,12 +1,5 @@
-/* global __dirname */
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-
-const source = fs.readFileSync(path.join(__dirname, '../lib/spotify-browser.ts'), 'utf8');
-const marker = 'export const installBrowserControlScript = String.raw`';
-const start = source.indexOf(marker) + marker.length;
-const script = source.slice(start, source.indexOf('`;', start));
+const loadSpotifyBrowser = require('./load-spotify-browser.cjs');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const makeState = (name, id, paused) => ({
   position: 33738, duration: 203520, paused, playback_speed: paused ? 0 : 1,
@@ -16,7 +9,7 @@ const makeState = (name, id, paused) => ({
   } },
 });
 
-async function run({ failRegistration = false } = {}) {
+async function run(script, development, { failRegistration = false } = {}) {
   let state = makeState('Obsession', '7fK0csBoqbcgUuWGV0cpoD', true);
   let registrations = 0, clock = 1000, resolvePending;
   const posted = [], timers = new Map();
@@ -60,8 +53,13 @@ async function run({ failRegistration = false } = {}) {
     assert.equal(registrations, 1, 'failed registration must back off');
     win.__spotifyBrowserControl({ type: 'diagnostics' });
     const diagnostics = posted.findLast(e => e.type === 'diagnostics');
-    assert.equal(diagnostics.connectObserver.registered, false);
-    assert.equal(diagnostics.connectObserver.error, 'offline');
+    if (development) {
+      assert.equal(diagnostics.connectObserver.registered, false);
+      assert.equal(diagnostics.connectObserver.error, 'offline');
+    } else {
+      assert.equal(diagnostics, undefined);
+    }
+    await flush();
     failRegistration = false;
     clock += 10000;
     win.__spotifyBrowserControl({ type: 'readMetadata' }); await flush();
@@ -90,8 +88,12 @@ async function run({ failRegistration = false } = {}) {
   clock += 250;
   win.__spotifyBrowserControl({ type: 'diagnostics' });
   const diagnostics = posted.findLast(e => e.type === 'diagnostics');
-  assert.equal(diagnostics.playback.source, 'spotify-connect');
-  assert.equal(diagnostics.playback.positionMs, 33988, 'advance the remote clock between samples');
+  if (development) {
+    assert.equal(diagnostics.playback.source, 'spotify-connect');
+    assert.equal(diagnostics.playback.positionMs, 33988, 'advance the remote clock between samples');
+  } else {
+    assert.equal(diagnostics, undefined);
+  }
   await flush();
 
   resolvePending = false;
@@ -110,6 +112,10 @@ async function run({ failRegistration = false } = {}) {
 }
 
 (async () => {
-  await run(); await run({ failRegistration: true });
+  for (const development of [false, true]) {
+    const { installBrowserControlScript: script } = loadSpotifyBrowser(development);
+    await run(script, development);
+    await run(script, development, { failRegistration: true });
+  }
   console.log('Spotify Connect checks passed: startup, paused state, remote changes, clock, stale DOM, registration backoff and background cancellation.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

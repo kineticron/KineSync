@@ -1,15 +1,10 @@
 /** Opt-in, memory-only telemetry. Exports only whitelisted timing fields and temporary identity labels.
  * Source monotonic time is unavailable; local receipt is JS callback/body receipt,
  * not hardware arrival. This module does not estimate clocks or alter playback. */
-export type ClockStamp = Readonly<{ wallMs: number; monotonicMs: number }>;
+import { timingNow, type ClockStamp, type TimingOrigin } from './timing-clock';
+export { timingNow } from './timing-clock';
+export type { ClockStamp, TimingContext, TimingOrigin } from './timing-clock';
 export type NumericEvidence = number | 'missing' | 'invalid' | 'nonfinite';
-export type TimingOrigin = 'dealer' | 'registration' | 'parser';
-export type TimingContext = {
-  receipt?: ClockStamp;
-  origin?: TimingOrigin;
-  connectionId?: string;
-  generation?: number;
-};
 export type TimingAnchor = Readonly<{
   capture: number;
   schemaPath: string;
@@ -57,9 +52,6 @@ let aliases = new Map<string, string>();
 let nextAlias = 0;
 let packets = new WeakMap<object, TimingAnchor>();
 
-export function timingNow(wallMs = Date.now()): ClockStamp {
-  return Object.freeze({ wallMs, monotonicMs: performance.now() });
-}
 export function timingCaptureActive(): boolean {
   if (enabled && performance.now() >= deadline) { enabled = false; aliases.clear(); }
   return enabled;

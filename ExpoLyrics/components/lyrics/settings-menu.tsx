@@ -363,7 +363,7 @@ function StatusPanel({
         <Text style={styles.statusMetaText}>{timingLabel}</Text>
       </View>
 
-      {!mobileOnly && connectionStatus === "connected" && (
+      {__DEV__ && !mobileOnly && connectionStatus === "connected" && (
         <Text style={styles.statusBridgeTiming} numberOfLines={2}>
           Bridge pipeline {Math.max(0, bridgePipelineMs)} ms · forward bias{" "}
           {Math.max(0, bridgeForwardBiasMs)} ms · native extrap{" "}
@@ -411,7 +411,7 @@ export const SettingsMenu = memo(function SettingsMenu({
     [lyrics, lyricsSource],
   );
   const latencyMs = usePlaybackStore((state) => open ? Math.max(0, state.driftOffset) : 0);
-  const bridgeTiming = usePlaybackStore((state) => open ? state.bridgeTiming : EMPTY_TIMING);
+  const bridgeTiming = usePlaybackStore((state) => __DEV__ && open ? state.bridgeTiming : EMPTY_TIMING);
   const activeSource = useMemo(
     () => inferActiveSource(lyricsSource),
     [lyricsSource],
@@ -451,14 +451,10 @@ export const SettingsMenu = memo(function SettingsMenu({
             closeScanner();
             bridgeClient.reconnectNow();
           })
-          .catch((error) => {
+          .catch(() => {
             if (!scannerSession.isCurrent(run)) return;
             scanHandled.current = false;
-            setScanError(
-              error instanceof Error
-                ? error.message
-                : "Could not save bridge settings.",
-            );
+            setScanError("Couldn’t save bridge settings. Try scanning again.");
           });
         return;
       }

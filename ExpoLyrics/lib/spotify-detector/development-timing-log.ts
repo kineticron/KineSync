@@ -1,4 +1,5 @@
-import { numericEvidence, timingNow, type ClockStamp, type NumericEvidence, type TimingOrigin } from './timing-diagnostics';
+import { numericEvidence, type NumericEvidence } from './timing-diagnostics';
+import { timingNow, type ClockStamp, type TimingOrigin } from './timing-clock';
 
 /** Automatic DEVELOPMENT-only bootstrap evidence. No timer, network, UI or
  * playback decisions. Lifecycle/track windows remain available after bootstrap. */

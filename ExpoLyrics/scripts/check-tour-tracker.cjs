@@ -33,7 +33,7 @@ const React = require('react');
       installBrowserControlPreludeScript: 'prelude', installBrowserControlScript: 'control', spotifyAuthProbeScript: 'auth' },
   };
   let timerId = 0;
-  const context = { exports: {}, require: name => { assert.ok(name in mocks, name); return mocks[name]; }, Date,
+  const context = { exports: {}, require: name => { assert.ok(name in mocks, name); return mocks[name]; }, Date, __DEV__: false,
     setTimeout: callback => { timers.set(++timerId, callback); return timerId; }, clearTimeout: id => timers.delete(id),
     setInterval: callback => { heartbeats.push(callback); return ++timerId; }, clearInterval() {} };
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname, '../components/lyrics/spotify-browser-fallback.tsx'), 'utf8'), {

@@ -139,8 +139,9 @@ async function checkLyricsStylePersistence() {
   const backendKey = 'kinesync_lyrics_renderer_backend';
   const legacyKey = 'kinesync_use_rust_renderer';
   const debugKey = 'kinesync_rust_debug_overlay';
+  const preferenceKey = 'kinesync_lyrics_backend_preference';
   const flush = () => new Promise(resolve => setImmediate(resolve));
-  function loadStore(values, development = false) {
+  function loadStore(values, development = false, platform = 'web') {
     const reads = [];
     const writes = [];
     const create = initialize => {
@@ -149,7 +150,7 @@ async function checkLyricsStylePersistence() {
       return { getState: () => state, setState: set };
     };
     const { usePlaybackStore } = load('store/playback-store.ts', {
-      'react-native': { Platform: { OS: 'web' }, AppState: { currentState: 'active' } },
+      'react-native': { Platform: { OS: platform }, AppState: { currentState: 'active' } },
       '@react-native-async-storage/async-storage': {
         getItem: async key => {
           reads.push(key);
@@ -159,9 +160,11 @@ async function checkLyricsStylePersistence() {
           writes.push(key);
           values.set(key, value);
         },
-        removeItem: async key => {
-          writes.push(key);
-          values.delete(key);
+        multiRemove: async keys => {
+          for (const key of keys) {
+            writes.push(key);
+            values.delete(key);
+          }
         },
       },
       zustand: { create },
@@ -172,39 +175,48 @@ async function checkLyricsStylePersistence() {
     return { store: usePlaybackStore, reads, writes };
   }
 
-  for (const [savedStyle, oldRustOptIn, savedBackend, expectedStyle, pendingStyle] of [
+  const cases = [
     [null, null, null, 'spicy'],
     ['amll', 'false', null, 'amll'],
     ['spicy', 'true', 'skia', 'spicy'],
     ['native', 'false', 'skia', 'amll'],
-    ['webview', 'false', 'rust', 'spicy'],
+    ['webview', 'false', 'webview', 'spicy'],
+    ['skia', 'false', 'skia', 'spicy'],
+    ['amll', 'false', 'webview', 'amll'],
+    ['rust', 'true', 'rust', 'spicy'],
     ['native', 'false', 'skia', 'spicy', 'spicy'],
-  ]) {
+  ];
+  for (const platform of ['ios', 'android']) for (const [savedStyle, oldRustOptIn, savedBackend, expectedStyle, pendingStyle] of cases) {
     const values = new Map([[styleKey, savedStyle], [debugKey, 'true']]);
-    if (savedBackend !== null) values.set(backendKey, savedBackend);
+    if (savedBackend !== null) { values.set(backendKey, savedBackend); values.set(preferenceKey, savedBackend); }
     if (oldRustOptIn !== null) values.set(legacyKey, oldRustOptIn);
-    const { store, reads, writes } = loadStore(values);
+    const { store, reads, writes } = loadStore(values, false, platform);
     assert.equal(store.getState().lyricsStyle, 'spicy', 'the style default is available before storage resolves');
     if (pendingStyle) store.getState().setLyricsStyle(pendingStyle);
     await flush();
     assert.equal(store.getState().lyricsStyle, expectedStyle);
-    assert.doesNotMatch(Object.keys(store.getState()).join(' '), /lyricsRendererBackend|useRustRenderer/i);
+    assert.doesNotMatch(Object.keys(store.getState()).join(' '), /(?:set)?lyrics(?:Renderer)?Backend|useRustRenderer/i);
     assert.equal(values.get(styleKey), savedStyle === null ? null : expectedStyle);
-    for (const [key, original] of [[backendKey, savedBackend], [legacyKey, oldRustOptIn]]) {
+    for (const key of [backendKey, legacyKey, preferenceKey]) {
       assert.equal(reads.includes(key), false, `startup never reads ${key}`);
-      assert.equal(writes.includes(key), false, `startup and style changes never write or remove ${key}`);
-      assert.equal(values.get(key), original ?? undefined, `the saved value of ${key} stays untouched`);
+      assert.equal(writes.includes(key), true, `startup retires ${key}`);
+      assert.equal(values.has(key), false, `no legacy renderer choice remains in ${key}`);
     }
     assert.equal(reads.includes(debugKey), false);
-    store.getState().setShowRustDebugOverlay(false);
-    assert.equal(store.getState().showRustDebugOverlay, false);
+    assert.equal(Object.hasOwn(store.getState(), 'setShowRustDebugOverlay'), false);
+    assert.equal(Object.hasOwn(store.getState(), 'showRustDebugOverlay'), false);
     assert.equal(values.get(debugKey), 'true', 'Release cannot write the debug overlay choice');
-    store.getState().setSimulatedLatencyMs(400);
-    store.getState().setPacketDropRate(0.25);
+    for (const key of ['setSimulatedLatencyMs', 'setPacketDropRate', 'simulatedLatencyMs', 'packetDropRate']) {
+      assert.equal(Object.hasOwn(store.getState(), key), false);
+    }
     store.getState().setPlaybackCompensationMs(125);
-    assert.equal(store.getState().simulatedLatencyMs, 0);
-    assert.equal(store.getState().packetDropRate, 0);
     assert.equal(store.getState().playbackCompensationMs, 125);
+    if (savedBackend !== null) {
+      const restarted = loadStore(values, false, platform);
+      await flush();
+      assert.equal(restarted.store.getState().lyricsStyle, expectedStyle, 'Migrated style survives restart');
+      assert.doesNotMatch(Object.keys(restarted.store.getState()).join(' '), /(?:set)?lyrics(?:Renderer)?Backend|useRustRenderer/i);
+    }
   }
 
   const values = new Map([[debugKey, 'false']]);
@@ -214,6 +226,10 @@ async function checkLyricsStylePersistence() {
   assert.equal(store.getState().showRustDebugOverlay, false);
   store.getState().setShowRustDebugOverlay(true);
   assert.equal(values.get(debugKey), 'true');
+  store.getState().setSimulatedLatencyMs(400);
+  store.getState().setPacketDropRate(0.25);
+  assert.equal(store.getState().simulatedLatencyMs, 400);
+  assert.equal(store.getState().packetDropRate, 0.25);
 }
 
 function checkRendererLabGate() {
@@ -336,12 +352,12 @@ function checkClosedMenu() {
     'react-native-reanimated': { __esModule: true, default: { View: 'AnimatedView' }, useReducedMotion: () => false,
       FadeInDown: { duration: () => ({ reduceMotion: () => ({}) }) }, ReduceMotion: { System: 0 } },
     '@/store/playback-store': { usePlaybackStore: fn => { selectors.push(fn); return fn(state); } },
-  }, h.globals);
+  }, { ...h.globals, __DEV__: false });
   h.run(() => SettingsMenu({ open: false }));
   const closed = [...selectors];
   for (let i = 0; i < 600; i++) for (const selector of closed) selector(state);
   assert.equal(reads, 0, 'A closed menu cannot read lyric/diagnostic packets on store updates');
-  h.run(() => SettingsMenu({ open: true })); assert.ok(reads >= 4, 'Opening the menu subscribes to current diagnostics');
+  h.run(() => SettingsMenu({ open: true })); assert.ok(reads >= 4, 'Opening the menu subscribes to its current playback data');
   h.unmount();
   console.log('Closed settings: zero lyric/diagnostic reads across 600 playback updates; fresh subscriptions on open passed.');
 }

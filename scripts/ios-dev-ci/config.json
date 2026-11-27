@@ -17,5 +17,5 @@
     "lto": "thin",
     "debugAssertions": false
   },
-  "developmentRustFeatures": ["dev-frame-trace"]
+  "developmentRustFeatures": ["dev-frame-trace", "dev-render-metrics"]
 }

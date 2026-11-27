@@ -138,7 +138,7 @@ async function requestAnonymousToken({ manualOverride = "", force = false, rejec
 export async function resolveMobileMusixmatchToken(manualOverride = "") {
   try { return await requestAnonymousToken({ manualOverride }); }
   catch (error) {
-    console.warn("[musixmatch] Mobile anonymous token request failed:", error instanceof Error ? error.message : "request failed");
+    if (typeof __DEV__ !== "undefined" && __DEV__) console.warn("[musixmatch] Mobile anonymous token request failed:", error instanceof Error ? error.message : "request failed");
     return "";
   }
 }
@@ -150,7 +150,7 @@ export async function refreshMobileMusixmatchToken(manualOverride = "", rejected
     return await requestAnonymousToken({ manualOverride, force: true, rejectedToken: rejected });
   }
   catch (error) {
-    console.warn("[musixmatch] Mobile anonymous token renewal failed:", error instanceof Error ? error.message : "request failed");
+    if (typeof __DEV__ !== "undefined" && __DEV__) console.warn("[musixmatch] Mobile anonymous token renewal failed:", error instanceof Error ? error.message : "request failed");
     return "";
   }
 }

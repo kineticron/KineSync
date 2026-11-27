@@ -1,8 +1,11 @@
 // Wire field numbers from librespot's connect.proto and player.proto (MIT).
 // Only decode state/identity fields; skip queues, transfer data, and commands.
 // https://github.com/librespot-org/librespot/tree/dev/protocol/proto
-import { timingCaptureActive } from './timing-diagnostics';
-import { developmentTimingActive } from './development-timing-log';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const timingDiagnostics = typeof __DEV__ !== 'undefined' && __DEV__ ? require('./timing-diagnostics') as typeof import('./timing-diagnostics') : null;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const developmentTimingLog = typeof __DEV__ !== 'undefined' && __DEV__ ? require('./development-timing-log') as typeof import('./development-timing-log') : null;
+
 type Field = { id: number; wire: number; value: number | Uint8Array };
 function fields(bytes: Uint8Array): Field[] {
   let pos = 0;
@@ -96,9 +99,11 @@ export function decodeCluster(bytes: Uint8Array, wrapped = false): any {
   const nested = outer.find(f => f.id === 1 && f.wire === 2);
   if (wrapped && nested) return { cluster: decodeCluster(nested.value as Uint8Array) };
   const out: any = { device: Object.create(null) };
+  const trace = typeof __DEV__ !== 'undefined' && __DEV__ &&
+    (timingDiagnostics?.timingCaptureActive() || developmentTimingLog?.developmentTimingActive());
   for (const f of outer) {
     if (f.wire === 0 && f.id === 9) out.server_timestamp_ms = f.value;
-    if ((timingCaptureActive() || developmentTimingActive()) && f.wire === 0) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && trace && f.wire === 0) {
       const clock = ({ 1: 'changed_timestamp_ms', 6: 'transfer_data_timestamp', 11: 'started_playing_at_timestamp' } as Record<number, string>)[f.id];
       if (clock) out[clock] = f.value;
     }

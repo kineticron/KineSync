@@ -140,6 +140,7 @@ const mocks = {
   '@/lib/optimistic-playback': optimisticPlayback,
   '@/lib/spotify-detector/client': { SpotifyDetector: Detector, SpotifyControlRejectedError, SpotifyPlaybackUnavailableError }, '@/lib/spotify-detector/bootstrap': { bootstrap: 'capture', bootstrapAndroidObserver: 'android-observer' },
   '@/lib/spotify-detector/development-timing-log': developmentTiming,
+  '@/lib/spotify-detector/health': { spotifyHealthMessage: () => 'Spotify connected' },
   '@/lib/spotify-detector/packet': { detectorPacket: s => { publishedSamples.push(s); return ({ trackId: s.uri, positionMs: s.positionMs, title: s.title || '', artworkUrl: s.artworkUrl || '', artist: s.artist || '', album: s.album || '' }); } },
   '@/lib/spotify-detector/timing-diagnostics': { startTimingCapture: () => timingCalls.push('start'), clearTimingCapture: () => timingCalls.push('clear'), timingSnapshot: () => ({ active: false, records: [] }) },
   '@/lib/spotify-browser': { installBrowserControlPreludeScript: 'prelude', installBrowserControlScript: 'control', spotifyAuthProbeScript: 'auth',
@@ -266,8 +267,8 @@ if (development) {
 } else assert.equal(developmentLogs.length, 0);
 assert.equal(timingCalls.length, 0, 'timing capture is off until explicit opt-in');
 const alertsBeforeDiagnostics = alerts.length;
-ref.current.runDiagnostics();
 if (development) {
+  ref.current.runDiagnostics();
   assert.equal(alerts.at(-1)[0], 'Spotify timing diagnostics');
   assert.equal(timingCalls.length, 0, 'opening the dialog does not start capture');
   alerts.at(-1)[2][0].onPress();
@@ -277,6 +278,7 @@ if (development) {
   alerts.at(-1)[2][2].onPress();
   assert.deepEqual(timingCalls, ['start', 'clear']);
 } else {
+  assert.equal(Object.hasOwn(ref.current, 'runDiagnostics'), false);
   assert.equal(alerts.length, alertsBeforeDiagnostics, 'Release cannot open timing capture through the imperative handle');
   assert.deepEqual(timingCalls, []);
   assert.deepEqual(timingShares, []);

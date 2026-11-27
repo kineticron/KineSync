@@ -264,7 +264,7 @@ export const installBrowserControlPreludeScript = String.raw`
     var perfNow = function () { return performance && typeof performance.now === 'function' ? performance.now() : now(); };
     var epochFromPerf = function (perfMs) { return now() - perfNow() + perfMs; };
 
-    window.__spotifyBrowserLabMediaSessionProbe = window.__spotifyBrowserLabMediaSessionProbe || { setPositionStateCalls: 0, lastSetPositionStateAtMs: 0 };
+    ${typeof __DEV__ !== 'undefined' && __DEV__ ? 'window.__spotifyBrowserLabMediaSessionProbe = window.__spotifyBrowserLabMediaSessionProbe || { setPositionStateCalls: 0, lastSetPositionStateAtMs: 0 };' : ''}
     window.__spotifyBrowserLabPositionState = window.__spotifyBrowserLabPositionState || null;
     window.__spotifyBrowserLabKnownMedia = window.__spotifyBrowserLabKnownMedia || [];
     window.__spotifyBrowserLabLastBearerToken = window.__spotifyBrowserLabLastBearerToken || '';
@@ -349,8 +349,7 @@ export const installBrowserControlPreludeScript = String.raw`
 
     var capturePositionState = function (state) {
       try {
-        window.__spotifyBrowserLabMediaSessionProbe.setPositionStateCalls += 1;
-        window.__spotifyBrowserLabMediaSessionProbe.lastSetPositionStateAtMs = now();
+        ${typeof __DEV__ !== 'undefined' && __DEV__ ? 'window.__spotifyBrowserLabMediaSessionProbe.setPositionStateCalls += 1;\n        window.__spotifyBrowserLabMediaSessionProbe.lastSetPositionStateAtMs = now();' : ''}
         if (!state) {
           window.__spotifyBrowserLabPositionState = null;
           return;
@@ -488,6 +487,58 @@ export const installBrowserControlPreludeScript = String.raw`
   })();
   true;
 `;
+
+const browserDiagnosticsScript = typeof __DEV__ !== 'undefined' && __DEV__ ? String.raw`
+    var readDiagnostics = function () {
+      var mediaSession = window.navigator && window.navigator.mediaSession;
+      var mediaProbe = window.__spotifyBrowserLabMediaSessionProbe || { setPositionStateCalls: 0, lastSetPositionStateAtMs: 0 };
+      var slider = progressSlider();
+      var data = connectSampleIsFresh() ? estimateSample(connectSample, 'spotify-connect', 0) : progressData();
+      var ui = updateUiInterpolationClock();
+      var fallbackDurationMs = ui ? ui.durationMs : sliderDurationMs();
+      var media = mediaClock(fallbackDurationMs);
+      var session = mediaSessionClock(fallbackDurationMs);
+      var candidates = [];
+      [media, session, ui].forEach(function (candidate) {
+        if (!candidate) return;
+        candidates.push({ path: candidate.source, positionMs: candidate.positionMs, durationMs: candidate.durationMs, isPlaying: candidate.isPlaying, precisionMs: candidate.precisionMs, source: candidate.source });
+      });
+      send({
+        type: 'diagnostics',
+        connectObserver: { found: Boolean(connectController), registered: connectRegistered, error: connectError },
+        mediaSession: {
+          available: Boolean(mediaSession),
+          playbackState: mediaSession ? String(mediaSession.playbackState || 'none') : 'unavailable',
+          setPositionStateCalls: Number(mediaProbe.setPositionStateCalls || 0),
+          lastSetPositionStateAgeMs: mediaProbe.lastSetPositionStateAtMs ? now() - mediaProbe.lastSetPositionStateAtMs : null
+        },
+        mediaElements: allKnownMedia().map(function (mediaElement) {
+          return {
+            tag: mediaElement.tagName.toLowerCase(),
+            currentTimeMs: Number.isFinite(mediaElement.currentTime) ? Math.round(mediaElement.currentTime * 1000) : null,
+            durationMs: Number.isFinite(mediaElement.duration) ? Math.round(mediaElement.duration * 1000) : null,
+            paused: Boolean(mediaElement.paused),
+            playbackRate: Number(mediaElement.playbackRate || 1),
+            readyState: Number(mediaElement.readyState || 0),
+            hasSource: Boolean(mediaElement.currentSrc)
+          };
+        }),
+        slider: slider ? {
+          found: true,
+          tag: slider.tagName.toLowerCase(),
+          role: slider.getAttribute('role'),
+          ariaValueNow: slider.getAttribute('aria-valuenow'),
+          ariaValueMax: slider.getAttribute('aria-valuemax'),
+          ariaValueText: slider.getAttribute('aria-valuetext'),
+          text: String(slider.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120)
+        } : { found: false },
+        playback: data ? { positionMs: data.positionMs, durationMs: data.durationMs, isPlaying: data.isPlaying, playbackRate: data.playbackRate || 1, precisionMs: data.precisionMs || 1000, source: data.source } : null,
+        internalCandidate: { found: false },
+        clockCandidates: candidates,
+        safeWindowGlobals: []
+      });
+    };
+` : '';
 
 export const installBrowserControlScript = String.raw`
   (function () {
@@ -838,7 +889,7 @@ export const installBrowserControlScript = String.raw`
     var connectReadPending = false;
     var connectSample = null;
     var connectMonitoringGeneration = 0;
-    var connectError = '';
+    ${typeof __DEV__ !== 'undefined' && __DEV__ ? "var connectError = '';" : ''}
     var connectSampleIsFresh = function () {
       return connectSample && perfNow() - connectSample.sampledAtPerfMs < 5000;
     };
@@ -904,11 +955,11 @@ export const installBrowserControlScript = String.raw`
           sampledAtPerfMs: perfNow(),
           precisionMs: 25
         };
-        connectError = '';
+        ${typeof __DEV__ !== 'undefined' && __DEV__ ? "connectError = '';" : ''}
         // The pending guard stays set while emitting, avoiding recursive reads.
         readPlayback(true);
       }).catch(function (error) {
-        connectError = String(error && error.message || error);
+        ${typeof __DEV__ !== 'undefined' && __DEV__ ? 'connectError = String(error && error.message || error);' : ''}
         connectRegisterAfterMs = now() + 10000;
         connectRegistered = false;
       }).then(function () { connectReadPending = false; });
@@ -1121,55 +1172,7 @@ export const installBrowserControlScript = String.raw`
       });
       readPlayback(true);
     };
-    var readDiagnostics = function () {
-      var mediaSession = window.navigator && window.navigator.mediaSession;
-      var mediaProbe = window.__spotifyBrowserLabMediaSessionProbe || { setPositionStateCalls: 0, lastSetPositionStateAtMs: 0 };
-      var slider = progressSlider();
-      var data = connectSampleIsFresh() ? estimateSample(connectSample, 'spotify-connect', 0) : progressData();
-      var ui = updateUiInterpolationClock();
-      var fallbackDurationMs = ui ? ui.durationMs : sliderDurationMs();
-      var media = mediaClock(fallbackDurationMs);
-      var session = mediaSessionClock(fallbackDurationMs);
-      var candidates = [];
-      [media, session, ui].forEach(function (candidate) {
-        if (!candidate) return;
-        candidates.push({ path: candidate.source, positionMs: candidate.positionMs, durationMs: candidate.durationMs, isPlaying: candidate.isPlaying, precisionMs: candidate.precisionMs, source: candidate.source });
-      });
-      send({
-        type: 'diagnostics',
-        connectObserver: { found: Boolean(connectController), registered: connectRegistered, error: connectError },
-        mediaSession: {
-          available: Boolean(mediaSession),
-          playbackState: mediaSession ? String(mediaSession.playbackState || 'none') : 'unavailable',
-          setPositionStateCalls: Number(mediaProbe.setPositionStateCalls || 0),
-          lastSetPositionStateAgeMs: mediaProbe.lastSetPositionStateAtMs ? now() - mediaProbe.lastSetPositionStateAtMs : null
-        },
-        mediaElements: allKnownMedia().map(function (mediaElement) {
-          return {
-            tag: mediaElement.tagName.toLowerCase(),
-            currentTimeMs: Number.isFinite(mediaElement.currentTime) ? Math.round(mediaElement.currentTime * 1000) : null,
-            durationMs: Number.isFinite(mediaElement.duration) ? Math.round(mediaElement.duration * 1000) : null,
-            paused: Boolean(mediaElement.paused),
-            playbackRate: Number(mediaElement.playbackRate || 1),
-            readyState: Number(mediaElement.readyState || 0),
-            hasSource: Boolean(mediaElement.currentSrc)
-          };
-        }),
-        slider: slider ? {
-          found: true,
-          tag: slider.tagName.toLowerCase(),
-          role: slider.getAttribute('role'),
-          ariaValueNow: slider.getAttribute('aria-valuenow'),
-          ariaValueMax: slider.getAttribute('aria-valuemax'),
-          ariaValueText: slider.getAttribute('aria-valuetext'),
-          text: String(slider.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120)
-        } : { found: false },
-        playback: data ? { positionMs: data.positionMs, durationMs: data.durationMs, isPlaying: data.isPlaying, playbackRate: data.playbackRate || 1, precisionMs: data.precisionMs || 1000, source: data.source } : null,
-        internalCandidate: { found: false },
-        clockCandidates: candidates,
-        safeWindowGlobals: []
-      });
-    };
+    ${browserDiagnosticsScript}
 
     var monitoringEnabled = true;
     window.__spotifyBrowserLabMonitoringEnabled = monitoringEnabled;
@@ -1219,7 +1222,7 @@ export const installBrowserControlScript = String.raw`
         if (command.type === 'previous') clickPlayerButton('previous', 'Previous');
         if (command.type === 'next') clickPlayerButton('next', 'Next');
         if (command.type === 'seek') seek(command.positionMs);
-        if (command.type === 'diagnostics') readDiagnostics();
+        ${typeof __DEV__ !== 'undefined' && __DEV__ ? "if (command.type === 'diagnostics') readDiagnostics();" : ''}
         if (command.type !== 'setMonitoring' || monitoringEnabled) {
           readMetadata();
           readPlayback(true);
@@ -1274,7 +1277,7 @@ export function parseBrowserEvent(payload: string): BrowserEvent | null {
         if (!Number.isFinite(Number(event[key]))) return null;
       }
       if (typeof event.isPlaying !== 'boolean' || typeof event.source !== 'string') return null;
-    } else if (!['ready', 'diagnostics', 'error'].includes(event.type)) {
+    } else if (!['ready', 'error'].includes(event.type) && !(typeof __DEV__ !== 'undefined' && __DEV__ && event.type === 'diagnostics')) {
       return null;
     }
     return event as BrowserEvent;

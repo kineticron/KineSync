@@ -60,12 +60,12 @@ private struct Anchor: Decodable {
   let snap: Bool
 }
 private struct TrackIdentity: Decodable { let generation: UInt64; let track_id: String }
-private struct TraceFrameRequest: Sendable {
+#if DEBUG
+private struct FrameRequest: Sendable {
   let token: UInt64
   let id: UInt64
   let segment: UInt64
 }
-#if DEBUG
 private struct TraceCapture: Sendable {
   let token: UInt64
   let generation: UInt64
@@ -73,6 +73,8 @@ private struct TraceCapture: Sendable {
   let startedMs: Double
   let session: String
 }
+#else
+private typealias FrameRequest = Void
 #endif
 
 // Only the serial queue touches Rust. Retirement is asynchronous and retains the
@@ -376,7 +378,7 @@ private final class RustOwner: @unchecked Sendable {
   }
   #endif
 
-  func draw(targetMs: Double, resumeStepMs: Double, trace: TraceFrameRequest?,
+  func draw(targetMs: Double, resumeStepMs: Double, request: FrameRequest?,
             completion: @escaping @MainActor (Int32, UInt64, Bool, Double) -> Void) {
     queue.async {
       #if DEBUG
@@ -398,9 +400,9 @@ private final class RustOwner: @unchecked Sendable {
       // Never replay a target which became stale while input/resize work ran.
       let frameTarget = max(targetMs, sampled)
       #if DEBUG
-      if let trace, let capture = self.traceCapture, capture.token == trace.token,
+      if let request, let capture = self.traceCapture, capture.token == request.token,
          capture.generation == self.currentGeneration {
-        result = kr_frame_trace_render(self.handle, frameTarget, sampled, resumeStepMs, trace.id, trace.segment)
+        result = kr_frame_trace_render(self.handle, frameTarget, sampled, resumeStepMs, request.id, request.segment)
       } else {
         result = kr_render(self.handle, frameTarget, sampled, resumeStepMs)
       }
@@ -510,7 +512,7 @@ private final class CallbackTrace {
     while count > 0, let first = samples[start], nowMs - first.arrivalMs > Self.windowMs { popFirst() }
   }
 
-  func record(id: UInt64, display: CADisplayLink, arrival: Double, requestedHz: Double, action: Action) -> TraceFrameRequest {
+  func record(id: UInt64, display: CADisplayLink, arrival: Double, requestedHz: Double, action: Action) -> FrameRequest {
     let began = CACurrentMediaTime()
     let timestamp = display.timestamp * 1000
     let target = display.targetTimestamp * 1000
@@ -547,7 +549,7 @@ private final class CallbackTrace {
     samples[index] = Sample(id: id, segment: segment, arrivalMs: now, timestampMs: timestamp, targetMs: target,
                             requestedHz: requestedHz, action: action, warmup: active && stableCount < 3,
                             intervalMs: interval, missed: missed, recordCpuMs: (CACurrentMediaTime() - began) * 1000)
-    return TraceFrameRequest(token: capture.token, id: id, segment: segment)
+    return FrameRequest(token: capture.token, id: id, segment: segment)
   }
 
   func snapshot(now: Double, requestedHz: Double, phase: String, export: Bool) -> [String: Any] {
@@ -801,7 +803,7 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     }
   }
 
-  private func recordTrace(_ display: CADisplayLink, _ start: Double, _ action: CallbackTrace.Action) -> TraceFrameRequest? {
+  private func recordTrace(_ display: CADisplayLink, _ start: Double, _ action: CallbackTrace.Action) -> FrameRequest? {
     guard let frameTrace else { return nil }
     traceCallbackID &+= 1
     return frameTrace.record(id: traceCallbackID, display: display, arrival: start, requestedHz: requestedHz, action: action)
@@ -1107,11 +1109,11 @@ final class KineSyncRustLyricsView: ExpoView, UIGestureRecognizerDelegate {
     let resumeStepMs = resumePending ? max(0, display.targetTimestamp - display.timestamp) * 1000 : 0
     resumePending = false
     #if DEBUG
-    let trace = recordTrace(display, start, .request)
+    let request = recordTrace(display, start, .request)
     #else
-    let trace: TraceFrameRequest? = nil
+    let request: FrameRequest? = nil
     #endif
-    owner.draw(targetMs: display.targetTimestamp * 1000, resumeStepMs: resumeStepMs, trace: trace) { [weak self] result, renderedGeneration, settling, nextCue in
+    owner.draw(targetMs: display.targetTimestamp * 1000, resumeStepMs: resumeStepMs, request: request) { [weak self] result, renderedGeneration, settling, nextCue in
       guard let self, self.session == epoch else { return }
       self.busy = false
       if result == 3 { self.dirty = true } // capacity retry at next fresh vsync

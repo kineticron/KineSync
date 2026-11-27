@@ -34,7 +34,7 @@ class Socket {
 }
 const module = { exports: {} };
 runInNewContext(bundle.outputFiles[0].text, { module, exports: module.exports, require: createRequire(import.meta.url),
-  __DEV__: false, process: { env: { NODE_ENV: 'test' } }, console, Buffer, TextDecoder, TextEncoder, URL, AbortController,
+  __DEV__: true, process: { env: { NODE_ENV: 'test' } }, console, Buffer, TextDecoder, TextEncoder, URL, AbortController,
   Date: class extends Date { static now() { return wall; } }, performance: { now: () => mono },
   WebSocket: Socket, fetch: (...args) => fetchResponse(...args),
   setTimeout: fn => { timers.set(++timerId, fn); return timerId; }, setInterval: fn => { timers.set(++timerId, fn); return timerId; },

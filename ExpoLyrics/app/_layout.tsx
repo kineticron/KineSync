@@ -26,7 +26,6 @@ export default function RootLayout() {
           <BridgeProvider>
             <Stack screenOptions={{ orientation: portraitOnly ? 'portrait' : 'default', statusBarHidden: false, statusBarStyle: 'light', contentStyle: { backgroundColor: Design.background } }}>
               <Stack.Screen name="(tabs)" options={{ headerShown: false, gestureEnabled: !touring }} />
-              <Stack.Screen name="modal" options={_stableOptions2} />
             </Stack>
           </BridgeProvider>
           {Platform.OS !== 'ios' && <StatusBar style="light" hidden={false} />}
@@ -38,4 +37,3 @@ export default function RootLayout() {
 
 // Static native props retain their identity across renders.
 const _stableStyle1 = { flex: 1 };
-const _stableOptions2 = { presentation: 'modal', title: 'Modal' } as const;

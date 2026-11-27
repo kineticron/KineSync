@@ -1,4 +1,3 @@
-import { arrivalHandle, linkArrival, publishArrival, arrivalEvent, arrivalSpan } from '@/lib/lyrics-arrival-trace';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { normalizeTranslationLanguage, type TranslationLanguage } from '@/lib/translation-settings';
@@ -8,7 +7,6 @@ import { enrichLyrics } from '@/lib/lyrics-enrich';
 import { extractHost, isPrivateIpv4 } from '@/lib/network';
 import { getBridgeSettings } from '@/lib/bridge-settings';
 import { resolvePacketArtworkUrl } from '@/lib/artwork';
-import { numericEvidence, packetTimingAnchor, recordTiming } from '@/lib/spotify-detector/timing-diagnostics';
 import {
   shouldAcceptPlaybackPacket,
   type PlaybackMode,
@@ -21,6 +19,12 @@ import type {
   PlaybackPacket,
   Track,
 } from '@/types/bridge';
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const timingDiagnostics = typeof __DEV__ !== 'undefined' && __DEV__ ? require('@/lib/spotify-detector/timing-diagnostics') as typeof import('@/lib/spotify-detector/timing-diagnostics') : null;
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const arrivalTrace = typeof __DEV__ !== 'undefined' && __DEV__ ? require('@/lib/lyrics-arrival-trace') as typeof import('@/lib/lyrics-arrival-trace') : null;
 
 const SEEK_RESET_THRESHOLD_MS = 1800;
 // Visible timelines run on the UI thread and lyrics project their own anchors.
@@ -99,32 +103,35 @@ function inferDefaultBridgeUrl() {
     return `ws://${host}:3001`;
   }
 
-  const Constants = require('expo-constants').default;
-  const constantsAny = Constants as unknown as Record<string, unknown>;
-  const expoGoConfig = (constantsAny.expoGoConfig || {}) as Record<
-    string,
-    unknown
-  >;
-  const manifest = (constantsAny.manifest || {}) as Record<string, unknown>;
+  if (__DEV__) {
+    const Constants = require('expo-constants').default;
+    const constantsAny = Constants as unknown as Record<string, unknown>;
+    const expoGoConfig = (constantsAny.expoGoConfig || {}) as Record<
+      string,
+      unknown
+    >;
+    const manifest = (constantsAny.manifest || {}) as Record<string, unknown>;
 
-  const candidates = [
-    extractHost(expoGoConfig.debuggerHost),
-    extractHost(manifest.debuggerHost),
-    extractHost(Constants.expoConfig?.hostUri),
-    extractHost(constantsAny?.linkingUri),
-  ].filter(Boolean);
+    const candidates = [
+      extractHost(expoGoConfig.debuggerHost),
+      extractHost(manifest.debuggerHost),
+      extractHost(Constants.expoConfig?.hostUri),
+      extractHost(constantsAny?.linkingUri),
+    ].filter(Boolean);
 
-  const preferredPrivateHost = candidates.find((host) => isPrivateIpv4(host));
-  const host =
-    preferredPrivateHost ||
-    candidates.find(
-      (candidate) => candidate === 'localhost' || candidate === '127.0.0.1',
-    ) ||
-    '';
-  if (!host) {
-    return '';
+    const preferredPrivateHost = candidates.find((host) => isPrivateIpv4(host));
+    const host =
+      preferredPrivateHost ||
+      candidates.find(
+        (candidate) => candidate === 'localhost' || candidate === '127.0.0.1',
+      ) ||
+      '';
+    if (!host) {
+      return '';
+    }
+    return `ws://${host}:3001`;
   }
-  return `ws://${host}:3001`;
+  return '';
 }
 
 type PlaybackState = {
@@ -144,12 +151,12 @@ type PlaybackState = {
   lyricsSource: string;
   lyricsStatusMessage: string;
   errorMessage: string;
-  simulatedLatencyMs: number;
-  packetDropRate: number;
+  simulatedLatencyMs?: number;
+  packetDropRate?: number;
   playbackCompensationMs: number;
   showSpotifyStatusBar: boolean;
-  showRustDebugOverlay: boolean;
-  setShowRustDebugOverlay: (value: boolean) => void;
+  showRustDebugOverlay?: boolean;
+  setShowRustDebugOverlay?: (value: boolean) => void;
   setShowSpotifyStatusBar: (value: boolean) => void;
   showTranslatedText: boolean;
   translationLanguage: TranslationLanguage;
@@ -176,8 +183,8 @@ type PlaybackState = {
   clearLyrics: () => void;
   setLyricsStatusMessage: (message: string) => void;
   setCurrentTrackArtwork: (trackId: string, artworkUrl: string) => void;
-  setSimulatedLatencyMs: (ms: number) => void;
-  setPacketDropRate: (rate: number) => void;
+  setSimulatedLatencyMs?: (ms: number) => void;
+  setPacketDropRate?: (rate: number) => void;
   setPlaybackCompensationMs: (ms: number) => void;
   setAutoHidePlaybackControls: (value: boolean) => void;
   setLyricsStyle: (mode: LyricsStyle) => void;
@@ -268,11 +275,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
   lyricsSource: '',
   lyricsStatusMessage: '',
   errorMessage: '',
-  simulatedLatencyMs: 0,
-  packetDropRate: 0,
   playbackCompensationMs: 0,
   showSpotifyStatusBar: false,
-  showRustDebugOverlay: __DEV__,
   showTranslatedText: true,
   translationLanguage: 'English',
   autoHidePlaybackControls: true,
@@ -306,13 +310,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     const nowMono = getMonotonicNow();
     const prev = get();
     if (!shouldAcceptPlaybackPacket(prev.playbackMode, source)) {
-      recordTiming('store-rejected', packetTimingAnchor(packet), { rejection: 'mode' });
+      if (typeof __DEV__ !== 'undefined' && __DEV__ && timingDiagnostics) timingDiagnostics.recordTiming('store-rejected', timingDiagnostics.packetTimingAnchor(packet), { rejection: 'mode' });
       return { trackChanged: false, seekDetected: false, accepted: false };
     }
     const sourceClockRaw = Number(packet.capturedAtMs ?? packet.timestamp ?? nowWall);
     const sourceClock = Number.isFinite(sourceClockRaw) ? sourceClockRaw : nowWall;
     if (sourceClock + 250 < prev.lastSourceClockMs) {
-      recordTiming('store-rejected', packetTimingAnchor(packet), { rejection: 'older-local-packet', storeSourceClockMs: numericEvidence(sourceClock) });
+      if (typeof __DEV__ !== 'undefined' && __DEV__ && timingDiagnostics) timingDiagnostics.recordTiming('store-rejected', timingDiagnostics.packetTimingAnchor(packet), { rejection: 'older-local-packet', storeSourceClockMs: timingDiagnostics.numericEvidence(sourceClock) });
       return { trackChanged: false, seekDetected: false, accepted: false };
     }
     const observedDelta = Math.max(-60_000, Math.min(60_000, nowWall - sourceClock));
@@ -357,9 +361,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     // produces visible bumps, even when the source is otherwise in sync.
     const preserveAnchor = !trackChanged && !playStateChanged && packet.isPlaying &&
       (Math.abs(projected - correctedPosition) <= 80 || (sameSourceAnchor && correctedPosition < projected));
-    recordTiming('store', packetTimingAnchor(packet), { positionMs: numericEvidence(correctedPosition),
-      projectedBeforeMs: numericEvidence(projected), latencyMs: numericEvidence(latency),
-      storeSourceClockMs: numericEvidence(sourceClock), playing: packet.isPlaying, preserveAnchor, seekDetected,
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && timingDiagnostics) timingDiagnostics.recordTiming('store', timingDiagnostics.packetTimingAnchor(packet), { positionMs: timingDiagnostics.numericEvidence(correctedPosition),
+      projectedBeforeMs: timingDiagnostics.numericEvidence(projected), latencyMs: timingDiagnostics.numericEvidence(latency),
+      storeSourceClockMs: timingDiagnostics.numericEvidence(sourceClock), playing: packet.isPlaying, preserveAnchor, seekDetected,
       sourceIdentityComplete: sourceKey !== null, sameSourceAnchor });
     const metadataChanged =
       trackChanged ||
@@ -422,15 +426,15 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     return { trackChanged, seekDetected, accepted: true };
   },
   setLyrics: (lyrics, source = 'qq-music', packet) => {
-    const parent = __DEV__ ? arrivalHandle(lyrics) : undefined;
-    const handle = __DEV__ ? publishArrival({}, source, parent) : undefined;
+    const parent = __DEV__ ? arrivalTrace?.arrivalHandle(lyrics) : undefined;
+    const handle = __DEV__ ? arrivalTrace?.publishArrival({}, source, parent) : undefined;
     if (__DEV__ && handle) {
-      arrivalEvent(handle, 0, 'store-input-received', undefined, undefined, lyrics.length);
-      arrivalEvent(handle, 0, 'payload-voices', undefined, undefined, lyrics.reduce((n, line) => n + 1 +
+      arrivalTrace?.arrivalEvent(handle, 0, 'store-input-received', undefined, undefined, lyrics.length);
+      arrivalTrace?.arrivalEvent(handle, 0, 'payload-voices', undefined, undefined, lyrics.reduce((n, line) => n + 1 +
         (line.spicyBackgrounds?.length ?? (line.backgroundSyllables?.length ? 1 : 0)), 0));
     }
-    const enriched = __DEV__ ? arrivalSpan(handle, 0, 'store-enrichment', () => enrichLyrics(lyrics)) : enrichLyrics(lyrics);
-    if (__DEV__) linkArrival(enriched, handle);
+    const enriched = __DEV__ && arrivalTrace ? arrivalTrace.arrivalSpan(handle, 0, 'store-enrichment', () => enrichLyrics(lyrics)) : enrichLyrics(lyrics);
+    if (__DEV__) arrivalTrace?.linkArrival(enriched, handle);
     set({ lyrics: enriched, lyricsSource: source, ...(packet ? { lyricsMetadata: packet.metadata, lyricsStatusMessage: packet.statusMessage } : {}) });
   },
   setLyricsMetadata: (metadata) => set({ lyricsMetadata: metadata || {} }),
@@ -459,16 +463,6 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       }
       return { currentTrack: { ...currentTrack, artworkUrl: nextArtworkUrl } };
     }),
-  setSimulatedLatencyMs: (ms) => {
-    if (!__DEV__) return;
-    const safe = Number.isFinite(ms) ? ms : 0;
-    set({ simulatedLatencyMs: Math.max(0, Math.min(3000, Math.floor(safe))) });
-  },
-  setPacketDropRate: (rate) => {
-    if (!__DEV__) return;
-    const safe = Number.isFinite(rate) ? rate : 0;
-    set({ packetDropRate: Math.max(0, Math.min(0.9, safe)) });
-  },
   setPlaybackCompensationMs: (ms) => {
     const safe = Number.isFinite(ms) ? ms : 0;
     set({ playbackCompensationMs: Math.max(-2000, Math.min(4000, Math.floor(safe))) });
@@ -479,13 +473,25 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     set({ showSpotifyStatusBar });
     void AsyncStorage.setItem('kinesync_spotify_status_bar', String(showSpotifyStatusBar)).catch(() => {});
   },
-  setShowRustDebugOverlay: (value) => {
-    if (!__DEV__) return;
-    rustDebugOverlaySettingChanged = true;
-    const showRustDebugOverlay = Boolean(value);
-    set({ showRustDebugOverlay });
-    void AsyncStorage.setItem('kinesync_rust_debug_overlay', String(showRustDebugOverlay)).catch(error => console.error('Could not save Rust debug overlay setting', error));
-  },
+  ...(__DEV__ ? {
+    simulatedLatencyMs: 0,
+    packetDropRate: 0,
+    setSimulatedLatencyMs: (ms: number) => {
+      const safe = Number.isFinite(ms) ? ms : 0;
+      set({ simulatedLatencyMs: Math.max(0, Math.min(3000, Math.floor(safe))) });
+    },
+    setPacketDropRate: (rate: number) => {
+      const safe = Number.isFinite(rate) ? rate : 0;
+      set({ packetDropRate: Math.max(0, Math.min(0.9, safe)) });
+    },
+    showRustDebugOverlay: true,
+    setShowRustDebugOverlay: (value: boolean) => {
+      rustDebugOverlaySettingChanged = true;
+      const showRustDebugOverlay = Boolean(value);
+      set({ showRustDebugOverlay });
+      void AsyncStorage.setItem('kinesync_rust_debug_overlay', String(showRustDebugOverlay)).catch(error => console.error('Could not save Rust debug overlay setting', error));
+    },
+  } : {}),
   setShowTranslatedText: (value) => {
     const showTranslatedText = Boolean(value);
     set({ showTranslatedText });
@@ -519,10 +525,20 @@ export function stopPlaybackClock() {
   clearPlaybackClockHandle();
 }
 
+// Rust is the only renderer. Retire the legacy choices without hydrating
+// a backend from storage. AMLL and Spicy remain separate style preferences.
+void Promise.resolve().then(() => AsyncStorage.multiRemove([
+  'kinesync_lyrics_renderer_backend',
+  'kinesync_lyrics_backend_preference',
+  'kinesync_use_rust_renderer',
+])).catch(() => {});
+
 void AsyncStorage.getItem('kinesync_lyrics_style').then(style => {
   if (lyricsStyleChanged) return;
   if (style === 'amll' || style === 'spicy') usePlaybackStore.setState({ lyricsStyle: style });
-  else if (style === 'native' || style === 'webview') usePlaybackStore.getState().setLyricsStyle(style === 'native' ? 'amll' : 'spicy');
+  // Older builds stored a renderer in the same field as the style.
+  else if (style === 'native') usePlaybackStore.getState().setLyricsStyle('amll');
+  else if (style === 'webview' || style === 'skia' || style === 'rust') usePlaybackStore.getState().setLyricsStyle('spicy');
 }).catch(() => {});
 
 void AsyncStorage.getItem('kinesync_spotify_status_bar').then(value => {

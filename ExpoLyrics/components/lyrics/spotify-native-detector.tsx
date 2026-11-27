@@ -11,9 +11,8 @@ import {
 } from '@/lib/optimistic-playback';
 import type { PlaybackCommand } from '@/lib/playback-command-queue';
 import { bootstrap, bootstrapAndroidObserver } from '@/lib/spotify-detector/bootstrap';
-import { logDevelopmentLifecycle, logDevelopmentTiming } from '@/lib/spotify-detector/development-timing-log';
+import { spotifyHealthMessage } from '@/lib/spotify-detector/health';
 import { detectorPacket } from '@/lib/spotify-detector/packet';
-import { clearTimingCapture, startTimingCapture, timingSnapshot } from '@/lib/spotify-detector/timing-diagnostics';
 import type { Sample, TrackMetadata } from '@/lib/spotify-detector/protocol';
 import { installBrowserControlPreludeScript, installBrowserControlScript, spotifyAuthProbeScript,
   isAllowedSpotifyWebViewNavigation, isTrustedSpotifyWebViewMessageUrl,
@@ -26,11 +25,26 @@ import { useSpotifySessionStore } from '@/store/spotify-session-store';
 import { usePlayerTourStore } from '@/store/player-tour-store';
 import type { SpotifyBrowserFallbackHandle } from './spotify-browser-fallback';
 import { registerNativeRendererReadyResync } from './native/native-renderer-ready-refresh';
-import { emitNativeClockDiagnostic, nativeClockCaptureActive, NATIVE_CLOCK_HTTP_TRACE_SCRIPT } from '@/lib/native-clock-diagnostics';
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const developmentTimingLog = typeof __DEV__ !== 'undefined' && __DEV__ ? require('@/lib/spotify-detector/development-timing-log') as typeof import('@/lib/spotify-detector/development-timing-log') : null;
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const nativeClockDiagnostics = typeof __DEV__ !== 'undefined' && __DEV__ ? require('@/lib/native-clock-diagnostics') as typeof import('@/lib/native-clock-diagnostics') : null;
+
+const runDiagnostics = __DEV__ ? () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { clearTimingCapture, startTimingCapture, timingSnapshot } = require('@/lib/spotify-detector/timing-diagnostics') as typeof import('@/lib/spotify-detector/timing-diagnostics');
+  Alert.alert('Spotify timing diagnostics', 'Optional: capture up to 60 seconds and 256 timing records in memory, then share. Device and playback session identities use temporary labels. No playback adjustment is applied.', [
+    { text: 'Start capture', onPress: startTimingCapture },
+    { text: 'Share capture', onPress: () => { void Share.share({ message: JSON.stringify(timingSnapshot(), null, 2) }).catch(() => {}); } },
+    { text: 'Clear', style: 'destructive', onPress: clearTimingCapture },
+  ]);
+} : undefined;
 
 const PLAYER_URL = 'https://open.spotify.com/';
 
-const CAPTURE_SCRIPT = `${bootstrap}\n${Platform.OS === 'android' ? bootstrapAndroidObserver : ''}\n${NATIVE_CLOCK_HTTP_TRACE_SCRIPT}`;
+const CAPTURE_SCRIPT = `${bootstrap}\n${Platform.OS === 'android' ? bootstrapAndroidObserver : ''}\n${__DEV__ ? nativeClockDiagnostics?.NATIVE_CLOCK_HTTP_TRACE_SCRIPT ?? '' : ''}`;
 const CONTROL_SCRIPT = `${spotifyAuthProbeScript}\n${installBrowserControlPreludeScript}\n${installBrowserControlScript}\n${makeBrowserCommandScript({ type: 'setMonitoring', enabled: false })}`;
 const USER_AGENT = Platform.OS === 'android'
   ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36'
@@ -50,7 +64,8 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   const [browserOpen, setBrowserOpen] = useState(false);
   const [browserGeneration, setBrowserGeneration] = useState(0);
   const [loggingOut, setLoggingOut] = useState(false);
-  const [status, setStatus] = useState('Connecting your Spotify session…');
+  const [status, setStatus] = useState('');
+  const health = useSpotifyConnectionStore(state => state.health);
   const web = useRef<WebView<object>>(null);
   const mounted = useRef(false);
   const documentUrl = useRef(PLAYER_URL);
@@ -64,7 +79,6 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   const enrichmentRun = useRef(0);
   const metadataPending = useRef('');
   const metadataAttempts = useRef(new Map<string, number>());
-  const diagnostics = useRef({ samples: 0, sourceTimestampMs: 0, receivedAtMs: 0, device: '', status: '' });
   const callbacks = useRef({ sample: (_s: Sample) => {}, status: (_s: string) => {}, sessionNeeded: (_id: number) => {}, sessionFinished: (_id: number) => {}, authenticated: (_token: string, _expires: number) => {} });
   const detectorRef = useRef<SpotifyDetector | null>(null);
   if (!detectorRef.current) detectorRef.current = new SpotifyDetector({
@@ -81,20 +95,20 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     usePlaybackStore.getState().playbackMode === 'mobile' && usePlaybackStore.getState().connectionStatus !== 'connected', []);
   const publish = (s: Sample, stage: 'sample-publish' | 'metadata-publish' = 'sample-publish') => {
     if (!canIngest()) return;
-    logDevelopmentTiming(stage, s);
+    if (__DEV__) developmentTimingLog?.logDevelopmentTiming(stage, s);
     const metadata = enriched.current.get(s.uri);
     const packet = detectorPacket(metadata ? { ...s, title: metadata.title || s.title,
       artist: metadata.artist || s.artist, album: metadata.album || s.album,
       artworkUrl: metadata.artworkUrl || s.artworkUrl } : s);
     const store = usePlaybackStore.getState();
-    const beforeMono = __DEV__ && nativeClockCaptureActive() ? performance.now() : null;
+    const beforeMono = __DEV__ && nativeClockDiagnostics?.nativeClockCaptureActive() ? performance.now() : null;
     const result = store.ingestPacket(packet, 'mobile');
     if (beforeMono !== null) {
       const after = usePlaybackStore.getState();
       const now = performance.now();
       const beforeProjected = store.anchorPositionMs + (store.isPlaying ? Math.max(0, now - store.anchorMonotonicMs) : 0);
       const afterProjected = after.anchorPositionMs + (after.isPlaying ? Math.max(0, now - after.anchorMonotonicMs) : 0);
-      emitNativeClockDiagnostic('store-ingest-result', { publication: stage, rawPosition: s.positionMs,
+      nativeClockDiagnostics?.emitNativeClockDiagnostic('store-ingest-result', { publication: stage, rawPosition: s.positionMs,
         playerTimestamp: s.positionTimestampMs, serverTimestamp: s.sourceServerTimestampMs,
         receiptWall: s.positionObservedAt?.wallMs, receiptMono: s.positionObservedAt?.monotonicMs,
         normalizedPosition: packet.positionMs, packetWall: packet.capturedAtMs, playing: s.playing,
@@ -108,7 +122,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
         trackChanged: result.trackChanged, seekDetected: result.seekDetected, ingestMs: now - beforeMono });
     }
     if (result.trackChanged) {
-      logDevelopmentTiming('store-track-change', s);
+      if (__DEV__) developmentTimingLog?.logDevelopmentTiming('store-track-change', s);
       enrichmentRun.current++;
       metadataPending.current = '';
       if (lyricsTimer.current !== null) clearTimeout(lyricsTimer.current);
@@ -148,9 +162,10 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
         if (lastSample.current) publish(lastSample.current, 'metadata-publish');
       }).catch(error => {
         if (ownsSample()) {
-          const message = error instanceof Error ? error.message : 'Spotify metadata lookup failed.';
-          diagnostics.current.status = message;
-          if (!usePlaybackStore.getState().currentTrack?.artist) store.setLyricsStatusMessage(`${message} Reconnect Spotify to retry artist lookup.`);
+          if (__DEV__) console.debug('Spotify track lookup failed', error);
+          if (!usePlaybackStore.getState().currentTrack?.artist) {
+            store.setLyricsStatusMessage('Couldn’t find song details. Reconnect Spotify to try again.');
+          }
         }
       }).finally(() => {
         if (run === enrichmentRun.current && metadataPending.current === uri) metadataPending.current = '';
@@ -169,16 +184,11 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     sample: s => {
       if (!canIngest()) return;
       lastSample.current = s;
-      diagnostics.current = { ...diagnostics.current, samples: diagnostics.current.samples + 1,
-        sourceTimestampMs: s.positionTimestampMs ?? 0, receivedAtMs: s.receivedAt, device: s.device };
       publish(s);
-      setStatus(`Spotify detector active · ${s.device || 'Spotify device'}`);
+      setStatus('');
     },
     status: s => {
-      if (mounted.current) {
-        diagnostics.current.status = s; setStatus(s);
-        if (__DEV__) console.debug('[Spotify detector]', s);
-      }
+      if (__DEV__ && mounted.current) console.debug('[Spotify detector]', s);
     },
     sessionNeeded: id => {
       if (!mounted.current || useSpotifySessionStore.getState().loggedOut) return;
@@ -204,18 +214,11 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     },
   };
   const openBrowser = useCallback(() => {
+    setStatus('');
     if (detector.health.phase === 'denied' || detector.health.phase === 'signInRequired') detector.beginSignIn();
     if (!useSpotifySessionStore.getState().signedIn) { router.push({ pathname: '/explore', params: { action: 'login' } }); return; }
     setBrowserOpen(true);
   }, [detector]);
-  const runDiagnostics = useCallback(() => {
-    if (!__DEV__) return;
-    Alert.alert('Spotify timing diagnostics', 'Optional: capture up to 60 seconds and 256 timing records in memory, then share. Device and playback session identities use temporary labels. No playback adjustment is applied.', [
-      { text: 'Start capture', onPress: startTimingCapture },
-      { text: 'Share capture', onPress: () => { void Share.share({ message: JSON.stringify(timingSnapshot(), null, 2) }).catch(() => {}); } },
-      { text: 'Clear', style: 'destructive', onPress: clearTimingCapture },
-    ]);
-  }, []);
   const sendCommand = useCallback((command: PlaybackCommand | 'toggle') => {
     if (!useSpotifySessionStore.getState().signedIn) { openBrowser(); return; }
     if (canIngest()) submitPlaybackCommand(command);
@@ -224,12 +227,13 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   useImperativeHandle(ref, () => ({ openBrowser, reload: () => { if (detector.health.phase !== 'rateLimited') { detector.refresh(true); if (detector.health.phase === 'denied' || detector.health.phase === 'signInRequired') remount(); } },
     togglePlayPause: () => sendCommand('toggle'), resyncPlayback,
     skipPrevious: () => sendCommand({ type: 'previous' }), skipNext: () => sendCommand({ type: 'next' }),
-    seekTo: positionMs => sendCommand({ type: 'seek', positionMs: Math.max(0, positionMs) }), runDiagnostics,
-  }), [detector, openBrowser, remount, resyncPlayback, runDiagnostics, sendCommand]);
+    seekTo: positionMs => sendCommand({ type: 'seek', positionMs: Math.max(0, positionMs) }),
+    ...(__DEV__ ? { runDiagnostics } : {}),
+  }), [detector, openBrowser, remount, resyncPlayback, sendCommand]);
 
   useEffect(() => {
     mounted.current = true;
-    logDevelopmentLifecycle('cold-mount', { next: AppState.currentState });
+    if (__DEV__) developmentTimingLog?.logDevelopmentLifecycle('cold-mount', { next: AppState.currentState });
     const enrichmentEpoch = enrichmentRun;
     const unregisterTransport = registerPlaybackCommandTransport('mobile', {
       accountVersion: () => detector.playbackAccountVersion,
@@ -265,7 +269,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     if (loggedOut) { detector.clear(); enrichmentRun.current++; metadataAttempts.current.clear(); metadataPending.current = ''; lastSample.current = null; enriched.current.clear(); }
     const update = (activity = AppState.currentState) => {
       const enabled = mobile && !loggedOut && activity !== 'background';
-      logDevelopmentLifecycle('observation-policy', { next: activity, enabled, mobile, loggedOut });
+      if (__DEV__) developmentTimingLog?.logDevelopmentLifecycle('observation-policy', { next: activity, enabled, mobile, loggedOut });
       detector.setEnabled(enabled);
     };
     detector.setActivity(AppState.currentState === 'active' ? 'active' : AppState.currentState === 'background' ? 'background' : 'inactive');
@@ -273,7 +277,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
     const unsubscribeNetwork = subscribeSpotifyReachability((hint, path) => detector.setReachability(hint, path));
     let previous = AppState.currentState;
     const sub = AppState.addEventListener('change', next => {
-      logDevelopmentLifecycle('app-state', { previous, next });
+      if (__DEV__) developmentTimingLog?.logDevelopmentLifecycle('app-state', { previous, next });
       previous = next;
       detector.setActivity(next === 'active' ? 'active' : next === 'background' ? 'background' : 'inactive');
       if (next === 'background') detector.setEnabled(false);
@@ -295,7 +299,7 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
   return <View pointerEvents={browserOpen ? 'auto' : 'none'} aria-hidden={!browserOpen}
     style={[styles.root, !browserOpen && styles.hidden]}>
     {browserOpen && <SafeAreaView edges={_stableEdges1} style={styles.header}>
-      <Text style={styles.title}>Spotify</Text><Text style={styles.status}>{status}</Text>
+      <Text style={styles.title}>Spotify</Text><Text style={styles.status}>{status || spotifyHealthMessage(health)}</Text>
       <View style={styles.buttons}><Button title="Reconnect" onPress={() => { if (detector.health.phase !== 'rateLimited') { detector.refresh(true); if (detector.health.phase === 'denied' || detector.health.phase === 'signInRequired') remount(); } }} />
         {__DEV__ && <Button title="Diagnostics" onPress={runDiagnostics} />}<Button title="Close" onPress={() => setBrowserOpen(false)} /></View>
     </SafeAreaView>}
@@ -319,12 +323,12 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
         if (run !== browserRun.current || loggedOut || !mounted.current) return;
         const origin = e.nativeEvent.url || documentUrl.current;
         if (!isTrustedSpotifyWebViewMessageUrl(origin)) return;
-        if (__DEV__ && nativeClockCaptureActive()) {
+        if (__DEV__ && nativeClockDiagnostics?.nativeClockCaptureActive()) {
           try {
             const diagnostic = JSON.parse(e.nativeEvent.data);
             if (diagnostic.type === 'nativeClockHttp' && diagnostic.status === 410 &&
               ['browser-device-registration', 'browser-player-state', 'browser-track-playback', 'browser-other'].includes(diagnostic.endpoint)) {
-              emitNativeClockDiagnostic('browser-http-410', { endpoint: diagnostic.endpoint, status: 410,
+              nativeClockDiagnostics?.emitNativeClockDiagnostic('browser-http-410', { endpoint: diagnostic.endpoint, status: 410,
                 browserWallMs: typeof diagnostic.wallMs === 'number' ? diagnostic.wallMs : null,
                 cacheProvenance: 'browser-response-status-only' });
               return;
@@ -349,7 +353,10 @@ export const SpotifyNativeDetector = forwardRef<SpotifyBrowserFallbackHandle>(fu
         if (event?.type === 'ready') {
           web.current?.injectJavaScript(makeBrowserCommandScript({ type: 'setMonitoring', enabled: false }));
         }
-        if (event?.type === 'error') setStatus(event.message);
+        if (event?.type === 'error') {
+          if (__DEV__) console.debug('Spotify browser command failed', event.message);
+          setStatus('Spotify couldn’t complete that action. Try reconnecting.');
+        }
       }}
       onError={() => setStatus('Spotify could not load. Open Spotify and reconnect.')}
       onContentProcessDidTerminate={() => { if (run === browserRun.current) remount(); }}

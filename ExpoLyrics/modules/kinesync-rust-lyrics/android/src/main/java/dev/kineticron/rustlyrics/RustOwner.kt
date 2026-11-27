@@ -54,8 +54,7 @@ internal class RustOwner(
   private var width = 0
   private var height = 0
   private var scale = 0f
-  private var lastMetrics = 0.0
-  private val metricsBuffer = DoubleArray(RustBridge.METRIC_SLOT_COUNT)
+  private val frameSample = FrameSample()
   // Gate-guarded latest-wins input.
   private var pendingUpdate: SurfaceInput? = null
   private var pendingAnchor: Anchor? = null
@@ -71,7 +70,7 @@ internal class RustOwner(
   }
   private fun failure() {
     failed = true
-    val message = if (BuildConfig.DEBUG) RustBridge.lastError() else "Lyrics renderer unavailable."
+    val message = frameSample.failureMessage()
     emit(mapOf("state" to "error", "message" to message))
   }
   private fun applyAnchor(forceSnap: Boolean = false) {
@@ -98,10 +97,9 @@ internal class RustOwner(
     val idx = if (permitted() && handle != 0L && !failed) RustBridge.hitTest(handle, x, y) else -1
     main.post { done(idx) }
   }
-  fun copyLayout(done: (String?) -> Unit) = worker.post {
-    val bytes = if (permitted() && handle != 0L) RustBridge.copyLayout(handle) else null
-    val s = bytes?.toString(Charsets.UTF_8)
-    main.post { done(if (s.isNullOrEmpty()) null else s) }
+  fun <T> readOnWorker(read: (Long) -> T?, done: (T?) -> Unit) = worker.post {
+    val value = if (permitted() && handle != 0L) read(handle) else null
+    main.post { done(value) }
   }
 
   private fun enqueue(update: SurfaceInput?, a: Anchor?) {
@@ -177,36 +175,10 @@ internal class RustOwner(
       val sampled = RustBridge.nowMs()
       result = RustBridge.render(handle, maxOf(targetMs, sampled), sampled, resumeStepMs)
       if (result < 0) { failure(); return@post }
-      val m = metricsBuffer
-      if (!RustBridge.fillMetrics(handle, m)) { failure(); return@post }
-      animating = m[RustBridge.M_ANIMATING] != 0.0
-      nextCue = m[RustBridge.M_NEXT_CUE]
-      if (BuildConfig.DEBUG && result == 0) {
-        val now = RustBridge.nowMs() / 1000
-        if (now - lastMetrics < 1) return@post
-        lastMetrics = now
-        val caps = m[RustBridge.M_CAPS].toLong()
-        emit(mapOf(
-          "state" to "metrics", "frames" to m[RustBridge.M_FRAMES], "sampleNativeMs" to sampled,
-          "targetNativeMs" to m[RustBridge.M_TARGET], "playing" to (anchor?.playing ?: false), "rate" to (anchor?.rate ?: 1.0),
-          "positionMs" to m[RustBridge.M_POSITION], "cpuSceneMs" to m[RustBridge.M_CPU_SCENE],
-          "visibleChanges" to (m[RustBridge.M_VISIBLE_CHANGES] != 0.0), "nextCueNativeMs" to nextCue,
-          "cpuEncodeMs" to m[RustBridge.M_CPU_ENCODE], "gpuIntervalMs" to m[RustBridge.M_GPU_INTERVAL],
-          "waitMs" to m[RustBridge.M_WAIT], "cpuBlitMs" to m[RustBridge.M_CPU_BLIT],
-          "acquireMs" to m[RustBridge.M_ACQUIRE], "blitSubmitMs" to m[RustBridge.M_BLIT_SUBMIT],
-          "pollMs" to m[RustBridge.M_POLL], "presentCallMs" to m[RustBridge.M_PRESENT_CALL],
-          "gpuCompleted" to m[RustBridge.M_COMPLETED], "gpuOutstanding" to m[RustBridge.M_OUTSTANDING],
-          "gpuBusy" to m[RustBridge.M_GPU_BUSY],
-          "gpuRendering" to ((caps and 1L) != 0L), "computeBlur" to ((caps and 2L) != 0L),
-          "adapterTimestampQuery" to ((caps and 4L) != 0L), "adapterEncoderTimestamp" to ((caps and 8L) != 0L),
-          "enabledBracketFeatures" to ((caps and 16L) != 0L),
-          "profilerReason" to (if ((caps and 4L) == 0L) "adapter has no timestamp queries"
-            else if ((caps and 8L) == 0L) "adapter has no encoder timestamp feature (required by whole-Vello bracket)"
-            else "live timestamp readback disabled to avoid an extra worker/GPU wait"),
-          "layoutMs" to m[RustBridge.M_LAYOUT], "width" to m[RustBridge.M_WIDTH], "height" to m[RustBridge.M_HEIGHT],
-          "note" to "CPU wall costs only. Present-call rate is not scanout.",
-        ))
-      }
+      if (!frameSample.read(handle)) { failure(); return@post }
+      animating = frameSample.animating
+      nextCue = frameSample.nextCue
+      if (BuildConfig.DEBUG && result == 0) frameSample.emit(sampled, anchor, ::emit)
     } finally {
       val r = FrameResult(result, currentGeneration, animating, nextCue)
       main.post { done(r) }

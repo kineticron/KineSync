@@ -15,11 +15,15 @@
     },
     {
       "path": "ExpoLyrics/lib/rust-lyrics-preparation.ts",
-      "sha256": "5d6c80dd87d73d12196dd4e8fe18e9ae606802f524988ae1916ad6c3792ed6ef"
+      "sha256": "e79b26cd38e7fffbcd8d909a4e96388d95b2c5f0f273002af01774295349ebea"
     },
     {
       "path": "ExpoLyrics/lib/rust-lyrics-protocol.js",
       "sha256": "a6001f23234e3a415550f5694cc21b31c29929663a6ded6bce5dfa26b685190d"
+    },
+    {
+      "path": "ExpoLyrics/package-lock.json",
+      "sha256": "d5419ff1f35fb62abae2c58974372fbf25ff004dff67ef21b7f8366df640042e"
     }
   ],
   "cases": [

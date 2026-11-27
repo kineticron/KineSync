@@ -37,7 +37,7 @@ export PATH=/home/kit/.cargo/bin:$PATH
 # Select exactly the software Vulkan ICD used for these measurements.
 export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json
 export CARGO_BUILD_JOBS=2
-cargo +1.97.0 build --release --locked
+cargo +1.97.0 build --release --locked --features dev-render-metrics
 cargo +1.97.0 fmt --check
 cargo +1.97.0 test --locked
 cargo +1.97.0 clippy --locked --all-targets -- -D warnings

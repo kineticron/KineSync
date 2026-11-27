@@ -18,7 +18,7 @@ function interpolate(value, input, output) {
 }
 
 function load(file, mocks, globals, source = fs.readFileSync(path.join(__dirname, '..', file), 'utf8')) {
-  const scope = { exports: {}, require: name => { assert.ok(name in mocks, name); return mocks[name]; }, ...globals };
+  const scope = { exports: {}, require: name => { assert.ok(name in mocks, name); return mocks[name]; }, __DEV__: false, ...globals };
   vm.runInNewContext(ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
   }).outputText, scope);
@@ -108,7 +108,7 @@ function timerHarness() {
   };
 }
 
-function launchHarness({ os = 'android', reduceMotion = false, width = 390, height = 844, splashFailures = 0, beforeEffects, source } = {}) {
+function launchHarness({ os = 'android', reduceMotion = false, width = 390, height = 844, splashFailures = 0, beforeEffects, source, dev = false } = {}) {
   const hooks = hookHarness();
   const timers = timerHarness();
   const values = [], styles = [], completions = [], warnings = [];
@@ -146,6 +146,7 @@ function launchHarness({ os = 'android', reduceMotion = false, width = 390, heig
     '@/constants/design': { Design: { background: '#090C13' }, Motion: {} },
     './launch-visibility': { LaunchVisibilityContext: { Provider: 'VisibilityProvider' } },
   }, {
+    __DEV__: dev,
     setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout,
     console: { warn: message => warnings.push(message) },
   }, source);
@@ -452,8 +453,8 @@ for (const timing of ['before effects', 'during effect replay']) {
   launch.unmount();
 }
 
-for (const failures of [1, 2]) {
-  const launch = launchHarness({ splashFailures: failures });
+for (const [failures, dev] of [[1, false], [2, false], [1, true], [2, true]]) {
+  const launch = launchHarness({ splashFailures: failures, dev });
   sendLayoutFacts(launch);
   launch.render();
   launch.render(true);
@@ -463,7 +464,7 @@ for (const failures of [1, 2]) {
   launch.timers.advance(150);
   launch.render();
   assert.equal(launch.calls.hide, 2);
-  assert.equal(launch.warnings.length, failures);
+  assert.equal(launch.warnings.length, dev ? failures : 0);
   launch.warnings.forEach((message, index) => assert.match(message, new RegExp(`attempt ${index + 1} of 2`)));
   launch.timers.advance(10000);
   assert.equal(launch.calls.hide, 2, 'native release retry is bounded');

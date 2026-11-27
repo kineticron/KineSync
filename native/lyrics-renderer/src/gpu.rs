@@ -2,6 +2,8 @@
 #[cfg(feature = "dev-frame-trace")]
 use crate::frame_trace::{Capture, GPU_SLOTS, GpuSlot, Request, Trace};
 use serde::Serialize;
+#[cfg(any(test, feature = "dev-render-metrics"))]
+use std::time::Instant;
 use std::{
     fs::File,
     io::BufWriter,
@@ -10,7 +12,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
         mpsc,
     },
-    time::Instant,
 };
 use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene, peniko::Color};
 use wgpu::{util::DeviceExt, *};
@@ -21,12 +22,13 @@ type Error = Box<dyn std::error::Error>;
 // Emphasized glyph glow shares these bases, so its spread narrows too.
 const LYRIC_BLUR_SIGMA_SCALE: f32 = 0.4;
 
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 pub struct FrameStats {
     pub cpu_encode_ms: f64,
     pub wait_readback_ms: f64,
     pub gpu_interval_ms: Option<f64>,
 }
+#[cfg(any(test, feature = "dev-render-metrics"))]
 struct Timestamps {
     queries: QuerySet,
     resolve: Buffer,
@@ -83,6 +85,7 @@ pub struct Gpu {
     target: Texture,
     target_view: TextureView,
     filter: Filter,
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     timestamps: Option<Timestamps>,
     width: u32,
     height: u32,
@@ -361,25 +364,33 @@ impl Gpu {
                 ..Default::default()
             })
             .await?;
-        let adapter_name = format!("{:?}", adapter.get_info());
-        println!("Adapter: {adapter_name}");
-        let wanted = Features::TIMESTAMP_QUERY | Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
-        let timestamp_supported = adapter.features().contains(wanted);
-        // GPU Vello, compute blur, adapter timestamp, adapter encoder timestamp,
-        // enabled bracket features. Rendering never depends on timestamp queries.
-        let capabilities =
-            3 | if adapter.features().contains(Features::TIMESTAMP_QUERY) {
-                4
+        #[cfg(any(test, feature = "dev-render-metrics"))]
+        let (adapter_name, capabilities, required_features) = {
+            let adapter_name = format!("{:?}", adapter.get_info());
+            println!("KineSync Rust renderer adapter: {adapter_name}");
+            let wanted = Features::TIMESTAMP_QUERY | Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+            let supported = adapter.features();
+            // GPU Vello, compute blur, adapter timestamp, adapter encoder timestamp,
+            // and enabled timestamp brackets.
+            let capabilities =
+                3 | if supported.contains(Features::TIMESTAMP_QUERY) {
+                    4
+                } else {
+                    0
+                } | if supported.contains(Features::TIMESTAMP_QUERY_INSIDE_ENCODERS) {
+                    8
+                } else {
+                    0
+                } | if supported.contains(wanted) { 16 } else { 0 };
+            let required_features = if supported.contains(wanted) {
+                wanted
             } else {
-                0
-            } | if adapter
-                .features()
-                .contains(Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
-            {
-                8
-            } else {
-                0
-            } | if timestamp_supported { 16 } else { 0 };
+                Features::empty()
+            };
+            (adapter_name, capabilities, required_features)
+        };
+        #[cfg(not(any(test, feature = "dev-render-metrics")))]
+        let (adapter_name, capabilities, required_features) = (String::new(), 3, Features::empty());
         let mut required_limits = wgpu::Limits::default();
         required_limits.max_inter_stage_shader_variables = required_limits
             .max_inter_stage_shader_variables
@@ -387,11 +398,7 @@ impl Gpu {
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor {
                 label: Some("lyrics-renderer"),
-                required_features: if timestamp_supported {
-                    wanted
-                } else {
-                    Features::empty()
-                },
+                required_features,
                 required_limits,
                 ..Default::default()
             })
@@ -421,7 +428,8 @@ impl Gpu {
         let filter = Filter::new(&device, &sharp, &overlay, &target, width, height, scale);
         let sharp_view = sharp.create_view(&Default::default());
         let target_view = target.create_view(&Default::default());
-        let timestamps = timestamp_supported.then(|| Timestamps {
+        #[cfg(any(test, feature = "dev-render-metrics"))]
+        let timestamps = (!required_features.is_empty() && surface.is_none()).then(|| Timestamps {
             queries: device.create_query_set(&QuerySetDescriptor {
                 label: Some("whole frame GPU interval"),
                 ty: QueryType::Timestamp,
@@ -440,9 +448,10 @@ impl Gpu {
                 mapped_at_creation: false,
             }),
         });
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         println!(
             "GPU timestamp brackets: {}",
-            if timestamp_supported {
+            if !required_features.is_empty() {
                 "supported (includes queue gaps across Vello submission)"
             } else {
                 "unsupported; CPU/wall only"
@@ -460,6 +469,7 @@ impl Gpu {
             target,
             target_view,
             filter,
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             timestamps,
             width,
             height,
@@ -525,7 +535,7 @@ impl Gpu {
         scene: &Scene,
         protection: (f32, f32),
         blur: bool,
-        profile: bool,
+        wait_for_completion: bool,
         appearance: bool,
         glow: bool,
     ) -> Result<FrameStats, Error> {
@@ -534,7 +544,7 @@ impl Gpu {
             None,
             protection,
             if blur { 1.0 } else { 0.0 },
-            profile,
+            wait_for_completion,
             appearance,
             glow,
         )
@@ -549,13 +559,16 @@ impl Gpu {
         overlay: Option<&Scene>,
         protection: (f32, f32),
         blur: f32,
-        profile: bool,
+        wait_for_completion: bool,
         appearance: bool,
         glow: bool,
     ) -> Result<FrameStats, Error> {
         self.check_error()?;
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let start = Instant::now();
-        let timestamps = self.timestamps.as_ref().filter(|_| profile);
+        #[cfg(any(test, feature = "dev-render-metrics"))]
+        let timestamps = self.timestamps.as_ref().filter(|_| wait_for_completion);
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         if let Some(ts) = timestamps {
             let mut encoder = self.device.create_command_encoder(&Default::default());
             encoder.write_timestamp(&ts.queries, 0);
@@ -611,17 +624,21 @@ impl Gpu {
                 appearance && glow,
             ),
         );
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         if let Some(ts) = timestamps {
             encoder.write_timestamp(&ts.queries, 1);
             encoder.resolve_query_set(&ts.queries, 0..2, &ts.resolve, 0);
             encoder.copy_buffer_to_buffer(&ts.resolve, 0, &ts.readback, 0, 16);
         }
         self.queue.submit([encoder.finish()]);
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let cpu_encode_ms = start.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let wait = Instant::now();
-        if profile {
+        if wait_for_completion {
             self.device.poll(PollType::wait_indefinitely())?;
         }
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let gpu_interval_ms = if let Some(ts) = timestamps {
             let data = read_buffer(&self.device, &ts.readback)?;
             let a = u64::from_le_bytes(data[..8].try_into()?);
@@ -632,11 +649,15 @@ impl Gpu {
             None
         };
         self.check_error()?;
-        Ok(FrameStats {
+        #[cfg(any(test, feature = "dev-render-metrics"))]
+        let stats = FrameStats {
             cpu_encode_ms,
             wait_readback_ms: wait.elapsed().as_secs_f64() * 1000.0,
             gpu_interval_ms,
-        })
+        };
+        #[cfg(not(any(test, feature = "dev-render-metrics")))]
+        let stats = FrameStats::default();
+        Ok(stats)
     }
     fn check_error(&self) -> Result<(), Error> {
         if let Some(message) = self
@@ -778,6 +799,7 @@ pub struct SurfaceRenderer {
     gpu: Gpu,
     config: SurfaceConfiguration,
     blitter: SurfaceBlit,
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     pub timing: SurfaceTiming,
     flight: Flight,
     #[cfg(feature = "dev-frame-trace")]
@@ -789,6 +811,7 @@ pub struct SurfaceRenderer {
     _instance: Instance,
 }
 impl SurfaceRenderer {
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     pub fn capabilities(&self) -> u32 {
         self.gpu.capabilities
     }
@@ -830,6 +853,7 @@ impl SurfaceRenderer {
             gpu,
             config,
             blitter,
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             timing: SurfaceTiming::default(),
             flight: Flight::default(),
             #[cfg(feature = "dev-frame-trace")]
@@ -906,9 +930,13 @@ impl SurfaceRenderer {
     /// Poll callbacks without waiting. A denied slot never queues a target or
     /// modifies animation state; the next display callback supplies fresh time.
     pub fn ready(&mut self) -> Result<bool, Error> {
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let start = Instant::now();
         self.gpu.device.poll(PollType::Poll)?;
-        self.timing.poll_ms = start.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(any(test, feature = "dev-render-metrics"))]
+        {
+            self.timing.poll_ms = start.elapsed().as_secs_f64() * 1000.0;
+        }
         #[cfg(feature = "dev-frame-trace")]
         if let Some(trace) = &mut self.trace
             && let Some(attempt) = &trace.attempt
@@ -923,9 +951,11 @@ impl SurfaceRenderer {
         self.gpu.check_error()?;
         Ok(self.flight.ready())
     }
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     pub fn completed(&self) -> u64 {
         self.flight.completed()
     }
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     pub fn outstanding(&self) -> u64 {
         self.flight.submitted - self.flight.completed()
     }
@@ -936,9 +966,13 @@ impl SurfaceRenderer {
             self.flight.ready(),
             "caller must reserve capacity before scene sampling"
         );
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let acquire_start = Instant::now();
         let acquired = self.surface.get_current_texture();
-        self.timing.acquire_ms = acquire_start.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(any(test, feature = "dev-render-metrics"))]
+        {
+            self.timing.acquire_ms = acquire_start.elapsed().as_secs_f64() * 1000.0;
+        }
         #[cfg(feature = "dev-frame-trace")]
         if let Some(attempt) = self.trace.as_mut().and_then(|trace| trace.attempt.as_mut()) {
             attempt.acquire(self.timing.acquire_ms);
@@ -1032,6 +1066,7 @@ impl SurfaceRenderer {
         let stats = self
             .gpu
             .render_frame_with_overlay(scene, overlay, band, blur, false, appearance, glow)?;
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let start = Instant::now();
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         self.blitter.copy(
@@ -1048,16 +1083,24 @@ impl SurfaceRenderer {
             attempt.marker_cpu(overhead);
         }
         let commands = encoder.finish();
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let submit_start = Instant::now();
         self.gpu.queue.submit([commands]);
-        self.timing.submit_ms = submit_start.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(any(test, feature = "dev-render-metrics"))]
+        {
+            self.timing.submit_ms = submit_start.elapsed().as_secs_f64() * 1000.0;
+        }
         let (id, completed) = self.flight.submit();
         self.gpu.queue.on_submitted_work_done(move || {
             completed.fetch_max(id, Ordering::Release);
         });
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let present_start = Instant::now();
         self.gpu.queue.present(frame);
-        self.timing.present_call_ms = present_start.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(any(test, feature = "dev-render-metrics"))]
+        {
+            self.timing.present_call_ms = present_start.elapsed().as_secs_f64() * 1000.0;
+        }
         #[cfg(feature = "dev-frame-trace")]
         if let Some(attempt) = self.trace.as_mut().and_then(|trace| trace.attempt.as_mut()) {
             attempt.present(stats.cpu_encode_ms, present_start);
@@ -1070,7 +1113,11 @@ impl SurfaceRenderer {
             }
         }
         self.gpu.check_error()?;
-        Ok((stats, start.elapsed().as_secs_f64() * 1000.0))
+        #[cfg(any(test, feature = "dev-render-metrics"))]
+        let blit_ms = start.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(not(any(test, feature = "dev-render-metrics")))]
+        let blit_ms = 0.0;
+        Ok((stats, blit_ms))
     }
 }
 impl Drop for SurfaceRenderer {
@@ -1098,6 +1145,7 @@ impl Flight {
         (self.submitted, self.completed.clone())
     }
 }
+#[cfg(any(test, feature = "dev-render-metrics"))]
 #[derive(Default)]
 pub struct SurfaceTiming {
     pub acquire_ms: f64,

@@ -409,8 +409,11 @@ pub(crate) struct Translation {
     ink: Ink,
     origin: Affine,
     pub extra_height: f64,
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     pub glyph_count: usize,
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     pub missing_glyphs: usize,
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     pub diagnostics: serde_json::Value,
 }
 
@@ -440,7 +443,7 @@ impl Translation {
         main_height: f64,
         fonts: &mut Fonts,
         layouts: &mut LayoutContext<()>,
-        collect_diagnostics: bool,
+        #[cfg(any(test, feature = "dev-render-metrics"))] collect_diagnostics: bool,
         source: Option<&PaintVoice>,
     ) -> Self {
         let mut p = policy.clone();
@@ -488,8 +491,11 @@ impl Translation {
         let mut scene = Scene::new();
         let mut runs = Vec::new();
         let mut fallback = None;
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let mut glyph_count = 0;
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let mut missing_glyphs = 0;
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let mut faces = Vec::new();
         let y = main_height + f64::from(p.margin);
         let origin = Affine::translate((f64::from(p.x), y));
@@ -497,9 +503,18 @@ impl Translation {
             for item in line.items() {
                 if let PositionedLayoutItem::GlyphRun(gr) = item {
                     let run = gr.run();
+                    #[cfg(any(test, feature = "dev-render-metrics"))]
                     if collect_diagnostics {
                         let face = fonts.describe(run.font());
                         faces.push(serde_json::json!({"face":face,"text_bytes":[run.text_range().start,run.text_range().end],"requested_attributes":format!("{:?}",run.font_attrs()),"normalized_coords":run.normalized_coords().iter().map(|c|c.to_bits()).collect::<Vec<_>>() }));
+                    }
+                    if words.is_some() {
+                        #[cfg(any(test, feature = "dev-render-metrics"))]
+                        for glyph in gr.positioned_glyphs() {
+                            glyph_count += 1;
+                            missing_glyphs += usize::from(glyph.id == 0);
+                        }
+                        continue;
                     }
                     let coords = run
                         .normalized_coords()
@@ -507,17 +522,18 @@ impl Translation {
                         .map(|c| c.to_bits())
                         .collect::<Vec<_>>();
                     let glyphs = gr.positioned_glyphs().map(|g| {
-                        glyph_count += 1;
-                        missing_glyphs += usize::from(g.id == 0);
+                        #[cfg(any(test, feature = "dev-render-metrics"))]
+                        {
+                            glyph_count += 1;
+                            missing_glyphs += usize::from(g.id == 0);
+                        }
                         vello::Glyph {
                             id: g.id,
                             x: g.x,
                             y: g.y,
                         }
                     });
-                    if words.is_some() {
-                        glyphs.for_each(drop);
-                    } else if p.spicy && has_color_glyphs(run.font()) {
+                    if p.spicy && has_color_glyphs(run.font()) {
                         // Vello decodes bitmap glyphs during encoding. Keep the
                         // image handles in the coverage scene for later frames.
                         fallback
@@ -577,8 +593,11 @@ impl Translation {
             ink,
             origin,
             extra_height: f64::from(p.margin) + height + f64::from(p.bottom),
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             glyph_count,
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             missing_glyphs,
+            #[cfg(any(test, feature = "dev-render-metrics"))]
             diagnostics: if collect_diagnostics {
                 serde_json::json!({"text":text,"policy":p,"height":height,"y":y,"line_count":layout.len(),"faces":faces})
             } else {

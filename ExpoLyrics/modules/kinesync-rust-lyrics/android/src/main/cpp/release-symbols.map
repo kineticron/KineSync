@@ -1,0 +1,3 @@
+{
+  local: kr_frame_trace_*; kr_copy_layout_json; kr_copy_error;
+};

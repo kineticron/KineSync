@@ -74,10 +74,16 @@ assert.match(settingsSource, /Lyrics style/);
 for (const style of ['amll', 'spicy']) assert.ok(settingsSource.includes(`id: "${style}"`));
 const homeSource = read('app/(tabs)/index.tsx');
 const settingsScreen = read('app/(tabs)/explore.tsx');
-assert.match(settingsScreen, /playbackMode === 'mobile' \? <SettingSection title="Advanced" collapsible>/);
-assert.doesNotMatch(settingsScreen, /lyricsRendererBackend|Advanced lyrics settings|>Lyrics renderer<|>Retry save</i);
+const advanced = settingsScreen.match(/playbackMode === 'mobile' \? <SettingSection title="Advanced" collapsible>([\s\S]*?)<\/SettingSection>/)?.[1];
+assert.ok(advanced, 'Mobile Advanced connection settings are still present');
+for (const option of ['Spotify player', 'Musixmatch User API Token', 'Gemini API Key', 'Save mobile API settings']) {
+  assert.ok(advanced.includes(option), `Advanced retains the ${option} connection option`);
+}
+assert.doesNotMatch(advanced, /<Switch\b|skia|webview|renderer|backend|lyrics style|diagnostics/i);
+assert.doesNotMatch(settingsScreen, /lyrics(?:Renderer)?Backend|Advanced lyrics settings|>Lyrics renderer<|>Retry save|Use Skia/i);
 assert.equal((homeSource.match(/: lyricsRenderer\}/g) ?? []).length, 2, 'both orientations render the same Rust surface');
-assert.doesNotMatch(homeSource, /useRustRenderer|lyricsRendererBackend|native-(amll|spicy)-lyrics-view/i);
+assert.doesNotMatch(homeSource, /useRustRenderer|lyrics(?:Renderer)?Backend|native-(amll|spicy)-lyrics-view|(?:skia|webview)-lyrics-(?:view|canvas)/i);
+assert.doesNotMatch(read('components/lyrics/rust/rust-lyrics-view.tsx'), /choose skia|switch to (?:skia|webview)/i);
 const home = ts.createSourceFile('index.tsx', homeSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const routingDeclarations = new Map();
 function readRouting(node) {

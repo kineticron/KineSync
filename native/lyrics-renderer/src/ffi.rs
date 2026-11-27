@@ -7,8 +7,9 @@ use crate::{
     motion::{AMLL_RETURN_MAX_STEP_MS, FollowScroll, ReturnFrame},
     scene::{ReturnTarget, ReturnTiming, TrackScene},
 };
+#[cfg(any(test, feature = "dev-render-metrics"))]
+use std::cell::RefCell;
 use std::{
-    cell::RefCell,
     collections::HashMap,
     ffi::{c_char, c_void},
     panic::{AssertUnwindSafe, catch_unwind},
@@ -16,9 +17,13 @@ use std::{
     time::Instant,
 };
 
+#[cfg(any(test, feature = "dev-render-metrics"))]
 thread_local! { static ERROR: RefCell<String> = const { RefCell::new(String::new()) }; }
 fn error(message: impl ToString) {
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     ERROR.with(|e| *e.borrow_mut() = message.to_string());
+    #[cfg(not(any(test, feature = "dev-render-metrics")))]
+    let _ = message;
 }
 fn boundary<T>(fallback: T, body: impl FnOnce() -> T) -> T {
     match catch_unwind(AssertUnwindSafe(body)) {
@@ -306,6 +311,7 @@ pub unsafe extern "C" fn kr_create(layer: *mut c_void, width: u32, height: u32, 
                     scene: vello::Scene::new(),
                     scale,
                     metrics: Metrics {
+                        #[cfg(any(test, feature = "dev-render-metrics"))]
                         capabilities: surface.capabilities(),
                         width,
                         height,
@@ -377,27 +383,36 @@ pub unsafe extern "C" fn kr_set_fonts(
 /// When non-null, out must be writable for capacity bytes; nil/0 queries the size.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kr_copy_layout_json(handle: u64, out: *mut u8, capacity: usize) -> usize {
-    boundary(0, || {
-        let mut registry = engines().lock().unwrap_or_else(|e| e.into_inner());
-        let Some(engine) = registry.get_mut(&handle) else {
-            error("Unknown renderer handle");
-            return 0;
-        };
-        let Some(layout) = &mut engine.layout else {
-            error("No prepared layout");
-            return 0;
-        };
-        // SAFETY: the caller supplies the output buffer described by this ABI.
-        match unsafe { copy_layout_receipt(layout, out, capacity) } {
-            Ok(needed) => needed,
-            Err(message) => {
-                error(message);
-                0
+    #[cfg(not(any(test, feature = "dev-render-metrics")))]
+    {
+        let _ = (handle, out, capacity);
+        0
+    }
+    #[cfg(any(test, feature = "dev-render-metrics"))]
+    {
+        boundary(0, || {
+            let mut registry = engines().lock().unwrap_or_else(|e| e.into_inner());
+            let Some(engine) = registry.get_mut(&handle) else {
+                error("Unknown renderer handle");
+                return 0;
+            };
+            let Some(layout) = &mut engine.layout else {
+                error("No prepared layout");
+                return 0;
+            };
+            // SAFETY: the caller supplies the output buffer described by this ABI.
+            match unsafe { copy_layout_receipt(layout, out, capacity) } {
+                Ok(needed) => needed,
+                Err(message) => {
+                    error(message);
+                    0
+                }
             }
-        }
-    })
+        })
+    }
 }
 // SAFETY: a non-null output must be writable for capacity bytes.
+#[cfg(any(test, feature = "dev-render-metrics"))]
 unsafe fn copy_layout_receipt(
     layout: &mut TrackScene,
     out: *mut u8,
@@ -471,12 +486,16 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
             engine.appearance.reset();
             engine.metrics.generation = generation;
             engine.metrics.animating = 0;
-            engine.metrics.visible_changes = 0;
+            #[cfg(any(test, feature = "dev-render-metrics"))]
+            {
+                engine.metrics.visible_changes = 0;
+            }
             engine.metrics.next_cue_native_ms = -1.0;
             return Ok(0);
         }
         engine.empty = None;
         engine.empty_scene = None;
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let started = Instant::now();
         let key = crate::scene::LayoutCache::key_with_credits(
             &track_id,
@@ -514,7 +533,10 @@ pub unsafe extern "C" fn kr_set_track(handle: u64, bytes: *const u8, length: usi
             engine.following,
             engine.metrics.position_ms,
         )?;
-        engine.metrics.layout_ms = started.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(any(test, feature = "dev-render-metrics"))]
+        {
+            engine.metrics.layout_ms = started.elapsed().as_secs_f64() * 1000.0;
+        }
         engine.lines = lines;
         engine.track_id = track_id;
         engine.settings = Some(settings);
@@ -735,6 +757,7 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
         if (width, height, scale) == (engine.metrics.width, engine.metrics.height, engine.scale) {
             return Ok(0);
         }
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let started = Instant::now();
         let position = engine.metrics.position_ms;
         let key = engine
@@ -806,7 +829,10 @@ pub extern "C" fn kr_resize(handle: u64, width: u32, height: u32, scale: f32) ->
         engine.scale = scale;
         engine.metrics.width = width;
         engine.metrics.height = height;
-        engine.metrics.layout_ms = started.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(any(test, feature = "dev-render-metrics"))]
+        {
+            engine.metrics.layout_ms = started.elapsed().as_secs_f64() * 1000.0;
+        }
         Ok(0)
     })
 }
@@ -960,6 +986,7 @@ pub extern "C" fn kr_hit_test(handle: u64, x: f64, y: f64) -> i32 {
 struct PreparedDrawable<T> {
     drawable: T,
     native_ms: f64,
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     preparation_ms: f64,
     return_frame: Option<ReturnFrame>,
 }
@@ -1047,10 +1074,12 @@ fn prepare_drawable<T>(
     mut clock: impl FnMut() -> f64,
     mut acquire: impl FnMut() -> Result<Option<T>, String>,
 ) -> Result<Option<PreparedDrawable<T>>, String> {
+    #[cfg(any(test, feature = "dev-render-metrics"))]
     let mut preparation_ms = 0.0;
     for _ in 0..2 {
         let prepared_ms = clock();
         let position = timeline.position(prepared_ms);
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let started = Instant::now();
         let timing = match &scroll {
             Some((scroll, true)) if scroll.may_prepare_return() => {
@@ -1103,7 +1132,10 @@ fn prepare_drawable<T>(
                 (true, None)
             }
         };
-        preparation_ms += started.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(any(test, feature = "dev-render-metrics"))]
+        {
+            preparation_ms += started.elapsed().as_secs_f64() * 1000.0;
+        }
         if !covered {
             continue;
         }
@@ -1118,6 +1150,7 @@ fn prepare_drawable<T>(
             return Ok(Some(PreparedDrawable {
                 drawable,
                 native_ms: prepared_ms,
+                #[cfg(any(test, feature = "dev-render-metrics"))]
                 preparation_ms,
                 return_frame,
             }));
@@ -1153,6 +1186,7 @@ fn prepare_drawable<T>(
             return Ok(Some(PreparedDrawable {
                 drawable,
                 native_ms,
+                #[cfg(any(test, feature = "dev-render-metrics"))]
                 preparation_ms,
                 return_frame,
             }));
@@ -1319,6 +1353,7 @@ impl Engine {
         resume_step_ms: f64,
         submit: impl FnOnce(&mut Self, T, (f32, f32), f32) -> Result<R, String>,
     ) -> Result<R, String> {
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         let started = Instant::now();
         let native_ms = prepared.native_ms;
         let position = self.timeline.position(native_ms);
@@ -1361,8 +1396,11 @@ impl Engine {
             native_ms,
             (self.timeline.playing, self.timeline.rate),
         );
-        self.metrics.cpu_scene_ms =
-            prepared.preparation_ms + started.elapsed().as_secs_f64() * 1000.0;
+        #[cfg(any(test, feature = "dev-render-metrics"))]
+        {
+            self.metrics.cpu_scene_ms =
+                prepared.preparation_ms + started.elapsed().as_secs_f64() * 1000.0;
+        }
         let blur = self.blur.value;
         let result = submit(self, prepared.drawable, band, blur)?;
         if let Some(frame) = prepared.return_frame {
@@ -1375,9 +1413,12 @@ impl Engine {
                 self.following,
             );
         }
-        self.metrics.target_native_ms = native_ms;
         self.metrics.animating = u32::from(schedule.continuous || blur_animating);
-        self.metrics.visible_changes = u32::from(schedule.visible_changes);
+        #[cfg(any(test, feature = "dev-render-metrics"))]
+        {
+            self.metrics.target_native_ms = native_ms;
+            self.metrics.visible_changes = u32::from(schedule.visible_changes);
+        }
         self.metrics.next_cue_native_ms = crate::scheduling::native_cue(
             position,
             native_ms,
@@ -1439,14 +1480,20 @@ fn render(
             let Some(frame) = engine.surface.acquire().map_err(|e| e.to_string())? else {
                 return Ok(2);
             };
-            let (stats, present) = engine
+            let frame_stats = engine
                 .surface
                 .render(scene, (0.0, engine.metrics.height as f32), frame)
                 .map_err(|e| e.to_string())?;
-            engine.metrics.frames += 1;
-            engine.metrics.cpu_encode_ms = stats.cpu_encode_ms;
-            engine.metrics.cpu_blit_ms = present;
-            engine.metrics.target_native_ms = native_ms;
+            #[cfg(any(test, feature = "dev-render-metrics"))]
+            {
+                let (stats, present) = frame_stats;
+                engine.metrics.frames += 1;
+                engine.metrics.cpu_encode_ms = stats.cpu_encode_ms;
+                engine.metrics.cpu_blit_ms = present;
+                engine.metrics.target_native_ms = native_ms;
+            }
+            #[cfg(not(any(test, feature = "dev-render-metrics")))]
+            let _ = frame_stats;
             engine.metrics.animating = 0;
             engine.metrics.next_cue_native_ms = -1.0;
             return Ok(0);
@@ -1458,11 +1505,17 @@ fn render(
             return Ok(1);
         }
         let ready = engine.surface.ready().map_err(|e| e.to_string())?;
-        engine.metrics.poll_ms = engine.surface.timing.poll_ms;
-        engine.metrics.completed = engine.surface.completed();
-        engine.metrics.outstanding = engine.surface.outstanding();
+        #[cfg(any(test, feature = "dev-render-metrics"))]
+        {
+            engine.metrics.poll_ms = engine.surface.timing.poll_ms;
+            engine.metrics.completed = engine.surface.completed();
+            engine.metrics.outstanding = engine.surface.outstanding();
+        }
         if !ready {
-            engine.metrics.gpu_busy += 1;
+            #[cfg(any(test, feature = "dev-render-metrics"))]
+            {
+                engine.metrics.gpu_busy += 1;
+            }
             return Ok(3);
         }
         let Some(prepared) = prepare_drawable(
@@ -1482,7 +1535,7 @@ fn render(
         else {
             return Ok(2);
         };
-        let (stats, present) = engine.submit_prepared_frame(
+        let frame_stats = engine.submit_prepared_frame(
             prepared,
             resume_step_ms,
             |engine, frame, band, blur| {
@@ -1499,16 +1552,22 @@ fn render(
                     .map_err(|e| e.to_string())
             },
         )?;
-        engine.metrics.frames += 1;
-        engine.metrics.cpu_encode_ms = stats.cpu_encode_ms;
-        engine.metrics.gpu_interval_ms = stats.gpu_interval_ms.unwrap_or(-1.0);
-        engine.metrics.wait_ms = stats.wait_readback_ms;
-        engine.metrics.cpu_blit_ms = present;
-        engine.metrics.acquire_ms = engine.surface.timing.acquire_ms;
-        engine.metrics.blit_submit_ms = engine.surface.timing.submit_ms;
-        engine.metrics.present_call_ms = engine.surface.timing.present_call_ms;
-        engine.metrics.completed = engine.surface.completed();
-        engine.metrics.outstanding = engine.surface.outstanding();
+        #[cfg(any(test, feature = "dev-render-metrics"))]
+        {
+            let (stats, present) = frame_stats;
+            engine.metrics.frames += 1;
+            engine.metrics.cpu_encode_ms = stats.cpu_encode_ms;
+            engine.metrics.gpu_interval_ms = stats.gpu_interval_ms.unwrap_or(-1.0);
+            engine.metrics.wait_ms = stats.wait_readback_ms;
+            engine.metrics.cpu_blit_ms = present;
+            engine.metrics.acquire_ms = engine.surface.timing.acquire_ms;
+            engine.metrics.blit_submit_ms = engine.surface.timing.submit_ms;
+            engine.metrics.present_call_ms = engine.surface.timing.present_call_ms;
+            engine.metrics.completed = engine.surface.completed();
+            engine.metrics.outstanding = engine.surface.outstanding();
+        }
+        #[cfg(not(any(test, feature = "dev-render-metrics")))]
+        let _ = frame_stats;
         Ok(0)
     };
     with(handle, |engine| {
@@ -1526,6 +1585,11 @@ fn render(
         result
     })
 }
+
+// Checked in the static archive before linking, where unused symbols can be stripped.
+#[cfg(feature = "dev-render-metrics")]
+#[unsafe(no_mangle)]
+pub extern "C" fn kr_render_metrics_build_marker() {}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn kr_frame_trace_available() -> bool {
@@ -1677,6 +1741,7 @@ pub unsafe extern "C" fn kr_copy_error(out: *mut c_char, capacity: usize) {
         if out.is_null() || capacity == 0 {
             return;
         }
+        #[cfg(any(test, feature = "dev-render-metrics"))]
         ERROR.with(|message| {
             let message = message.borrow();
             let count = message.len().min(capacity - 1);
@@ -1686,6 +1751,11 @@ pub unsafe extern "C" fn kr_copy_error(out: *mut c_char, capacity: usize) {
                 out.add(count).write(0);
             }
         });
+        #[cfg(not(any(test, feature = "dev-render-metrics")))]
+        // SAFETY: the caller supplies at least one writable byte.
+        unsafe {
+            out.write(0);
+        }
     });
 }
 #[cfg(test)]

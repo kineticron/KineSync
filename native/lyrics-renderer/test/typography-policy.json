@@ -43,7 +43,7 @@
     },
     {
       "path": "ExpoLyrics/lib/rust-lyrics-preparation.ts",
-      "sha256": "5d6c80dd87d73d12196dd4e8fe18e9ae606802f524988ae1916ad6c3792ed6ef"
+      "sha256": "e79b26cd38e7fffbcd8d909a4e96388d95b2c5f0f273002af01774295349ebea"
     },
     {
       "path": "ExpoLyrics/components/lyrics/native/spicy-native-layout.ts",
@@ -63,7 +63,19 @@
     },
     {
       "path": "ExpoLyrics/package-lock.json",
-      "sha256": "5830adb8fc4c59439afaf881798aafe63d52d7cd43d79331bbb16b2e4bc3c047"
+      "sha256": "d5419ff1f35fb62abae2c58974372fbf25ff004dff67ef21b7f8366df640042e"
+    },
+    {
+      "path": "DesktopBridge/src/lyricsLineSegmentation.js",
+      "sha256": "e282232fa86370e72ea52dabb50e7d430f31a57278a1204220d39ceaef64a685"
+    },
+    {
+      "path": "DesktopBridge/src/lyricsTtmlTranslations.js",
+      "sha256": "1888c7da215d0b0e8a0e7f90d49e8cdc2d22a4dcc008e81d3eb8ac30634b3c13"
+    },
+    {
+      "path": "ExpoLyrics/lib/lyrics-ttml-import.js",
+      "sha256": "283f8b4edc4e6d89524c05698584c318253c7f4f09047127a35e6b991c14c626"
     }
   ],
   "cases": [

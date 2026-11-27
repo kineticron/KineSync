@@ -1,10 +1,12 @@
-import { beginArrival, linkArrival, arrivalEvent, arrivalSpan } from "./lyrics-arrival-trace";
 // Generated mobile bundle from DesktopBridge/src/lyrics/parts.
 // Keep source behavior aligned with the Desktop Bridge parts.
 import { Buffer } from "buffer";
 import * as pako from "pako";
 import CryptoJS from "crypto-js";
 import { parseTtmlToLyrics as parseLrcRedTtml, parseTtmlTimeExpression as parseLrcRedTime, extractTtmlMetadata as extractLrcRedTtmlMetadata } from "./lyrics-ttml-import";
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const arrivalDiagnostics = typeof __DEV__ !== "undefined" && __DEV__ ? require("./lyrics-arrival-trace") : null;
 
 const process = { env: {} };
 const isBrowserRuntime =
@@ -5509,13 +5511,13 @@ const NETEASE_BASE_URLS = [
 ];
 const NETEASE_DIRECT_API_URL = "https://interface.music.163.com";
 const SPICY_LYRICS_API_URL = "https://api.spicylyrics.org";
-const SPICY_DEBUG_ENABLED = ["1", "true", "yes", "on"].includes(
+const SPICY_DEBUG_ENABLED = typeof __DEV__ !== "undefined" && __DEV__ && ["1", "true", "yes", "on"].includes(
   String(process.env.SPICY_DEBUG || "")
     .trim()
     .toLowerCase(),
 );
 
-function spicyDebugLog(message, meta = undefined) {
+const spicyDebugLog = typeof __DEV__ !== "undefined" && __DEV__ ? function spicyDebugLog(message, meta = undefined) {
   if (!SPICY_DEBUG_ENABLED) {
     return;
   }
@@ -5524,7 +5526,7 @@ function spicyDebugLog(message, meta = undefined) {
     return;
   }
   console.log(`[spicy-debug] ${message}`, meta);
-}
+} : null;
 
 const SPOTIFY_PARTNER_API_URL =
   "https://api-partner.spotify.com/pathfinder/v1/query";
@@ -5949,12 +5951,12 @@ async function fetchText(url, { headers = {}, timeoutMs = 8_000, arrivalTrace } 
       }),
       signal: controller.signal,
     });
-    if (arrivalTrace) arrivalEvent(arrivalTrace, 0, 'response-rn-continuation');
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && arrivalTrace) arrivalDiagnostics?.arrivalEvent(arrivalTrace, 0, 'response-rn-continuation');
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
-    return arrivalTrace ? response.text().then(body => {
-      arrivalEvent(arrivalTrace, 0, 'body-rn-continuation');
+    return typeof __DEV__ !== 'undefined' && __DEV__ && arrivalTrace ? response.text().then(body => {
+      arrivalDiagnostics?.arrivalEvent(arrivalTrace, 0, 'body-rn-continuation');
       return body;
     }) : response.text();
   } finally {
@@ -8325,7 +8327,7 @@ async function resolveQqReferenceFingerprint(track) {
   }
 }
 
-function createSpicyFetchProfiler() {
+const createSpicyFetchProfiler = typeof __DEV__ !== "undefined" && __DEV__ ? function createSpicyFetchProfiler() {
   const enabled = ["1", "true", "yes", "on"].includes(
     String(process.env.SPICY_PROFILE || "").trim().toLowerCase(),
   );
@@ -8361,7 +8363,7 @@ function createSpicyFetchProfiler() {
       return summary;
     },
   };
-}
+} : null;
 
 function createSpicyNoMatch(stage) {
   const error = createSourceStageNoMatchError("spicy", stage);
@@ -8375,7 +8377,7 @@ async function fetchFromSpicyLyrics(
   { spicyLyricsPublishableKey = process.env.SPICY_LYRICS_PUBLISHABLE_KEY || "" } = {},
 ) {
   track = await resolveLyricsTrackMetadata(track, ["spotifyTrackId"]);
-  const profile = createSpicyFetchProfiler();
+  const profile = typeof __DEV__ !== "undefined" && __DEV__ ? createSpicyFetchProfiler?.() : null;
   const publishableKey = spicyLyricsPublishableKey;
 
   const directSpotifyId = String(track?.spotifyTrackId || "").trim();
@@ -8383,20 +8385,20 @@ async function fetchFromSpicyLyrics(
   let idResolvePath = directSpotifyId ? "direct-spotify-track-id" : "unknown";
   if (directSpotifyId) {
     spotifyTrackIds = [directSpotifyId];
-    profile.mark("2-spotify-id-resolve", {
+    if (typeof __DEV__ !== "undefined" && __DEV__) profile?.mark("2-spotify-id-resolve", {
       path: idResolvePath,
       candidateCount: spotifyTrackIds.length,
     });
   } else {
-    profile.mark("2-spotify-id-resolve", {
+    if (typeof __DEV__ !== "undefined" && __DEV__) profile?.mark("2-spotify-id-resolve", {
       path: "missing-spotify-track-id",
       candidateCount: 0,
     });
-    profile.finish({ ok: false, failedStep: "2-spotify-id-resolve" });
+    if (typeof __DEV__ !== "undefined" && __DEV__) profile?.finish({ ok: false, failedStep: "2-spotify-id-resolve" });
     throw createSpicyNoMatch("spotify-track-lookup");
   }
 
-  spicyDebugLog("Spicy source candidate Spotify IDs", {
+  if (typeof __DEV__ !== "undefined" && __DEV__) spicyDebugLog?.("Spicy source candidate Spotify IDs", {
     directSpotifyId,
     spotifyTrackIds,
   });
@@ -8428,14 +8430,14 @@ async function fetchFromSpicyLyrics(
       continue;
     }
 
-    const parseStartedAt = Date.now();
+    const parseStartedAt = typeof __DEV__ !== "undefined" && __DEV__ ? Date.now() : 0;
     const sourceLabel = getSpicySourceLabel(
       spicyLyricsData,
       track?.durationMs || 0,
     );
 
     const lyrics = parseSpicyLyrics(spicyLyricsData, track?.durationMs || 0);
-    profile.mark(`4-parse-lyrics#${candidateIndex + 1}`, {
+    if (typeof __DEV__ !== "undefined" && __DEV__) profile?.mark(`4-parse-lyrics#${candidateIndex + 1}`, {
       spotifyTrackId,
       lineCount: lyrics.length,
       elapsedMs: Date.now() - parseStartedAt,
@@ -8458,7 +8460,7 @@ async function fetchFromSpicyLyrics(
     const identityComparison = compareAuthoritativeIdentity(track, spicyIdentity);
     const identityMatched = identityComparison === true;
     if (identityComparison === false) {
-      profile.mark(`5-variant-heuristics#${candidateIndex + 1}`, {
+      if (typeof __DEV__ !== "undefined" && __DEV__) profile?.mark(`5-variant-heuristics#${candidateIndex + 1}`, {
         spotifyTrackId,
         declaredTitleMatch,
         mismatch: true,
@@ -8467,7 +8469,7 @@ async function fetchFromSpicyLyrics(
       lastNoMatchError = createSpicyNoMatch("identity-conflict");
       continue;
     }
-    const variantStartedAt = Date.now();
+    const variantStartedAt = typeof __DEV__ !== "undefined" && __DEV__ ? Date.now() : 0;
     if (
       featuredVariantLyricsMismatch(track, lyrics, {
         source: "spicy",
@@ -8475,13 +8477,13 @@ async function fetchFromSpicyLyrics(
         candidateIdentity: spicyIdentity,
       })
     ) {
-      profile.mark(`5-variant-heuristics#${candidateIndex + 1}`, {
+      if (typeof __DEV__ !== "undefined" && __DEV__) profile?.mark(`5-variant-heuristics#${candidateIndex + 1}`, {
         spotifyTrackId,
         declaredTitleMatch,
         mismatch: true,
         elapsedMs: Date.now() - variantStartedAt,
       });
-      spicyDebugLog("Spicy source rejected feat/variant lyrics mismatch", {
+      if (typeof __DEV__ !== "undefined" && __DEV__) spicyDebugLog?.("Spicy source rejected feat/variant lyrics mismatch", {
         spotifyTrackId,
         title: String(track?.title || ""),
         spicyVariantTitles: spicyMetadata.titles,
@@ -8493,7 +8495,7 @@ async function fetchFromSpicyLyrics(
       lastNoMatchError = createSpicyNoMatch("featured-variant-mismatch");
       continue;
     }
-    profile.mark(`5-variant-heuristics#${candidateIndex + 1}`, {
+    if (typeof __DEV__ !== "undefined" && __DEV__) profile?.mark(`5-variant-heuristics#${candidateIndex + 1}`, {
       spotifyTrackId,
       declaredTitleMatch,
       mismatch: false,
@@ -8505,9 +8507,9 @@ async function fetchFromSpicyLyrics(
       shouldUseQqFingerprintForSpicyVariantCheck(track) &&
       declaredTitleMatch !== true
     ) {
-      const qqStartedAt = Date.now();
+      const qqStartedAt = typeof __DEV__ !== "undefined" && __DEV__ ? Date.now() : 0;
       qqReferenceFingerprint = await getQqReferenceFingerprintLazy();
-      profile.mark(`6-qq-fingerprint#${candidateIndex + 1}`, {
+      if (typeof __DEV__ !== "undefined" && __DEV__) profile?.mark(`6-qq-fingerprint#${candidateIndex + 1}`, {
         spotifyTrackId,
         ran: true,
         hasFingerprint: Boolean(qqReferenceFingerprint),
@@ -8520,7 +8522,7 @@ async function fetchFromSpicyLyrics(
           buildLyricsContentFingerprint(lyrics, track),
         )
       ) {
-        spicyDebugLog("Spicy source rejected QQ fingerprint mismatch", {
+        if (typeof __DEV__ !== "undefined" && __DEV__) spicyDebugLog?.("Spicy source rejected QQ fingerprint mismatch", {
           spotifyTrackId,
           title: String(track?.title || ""),
           qqReferenceFingerprintPreview: String(qqReferenceFingerprint || "").slice(
@@ -8536,7 +8538,7 @@ async function fetchFromSpicyLyrics(
         continue;
       }
     } else {
-      profile.mark(`6-qq-fingerprint#${candidateIndex + 1}`, {
+      if (typeof __DEV__ !== "undefined" && __DEV__) profile?.mark(`6-qq-fingerprint#${candidateIndex + 1}`, {
         spotifyTrackId,
         ran: false,
         skippedReason:
@@ -8576,7 +8578,7 @@ async function fetchFromSpicyLyrics(
     if (!Object.keys(candidate.metadata).length) {
       candidate.metadata = undefined;
     }
-    spicyDebugLog("Spicy source parsed candidate", {
+    if (typeof __DEV__ !== "undefined" && __DEV__) spicyDebugLog?.("Spicy source parsed candidate", {
       spotifyTrackId,
       source: candidate.source,
       lineCount: Array.isArray(candidate.lyrics) ? candidate.lyrics.length : 0,
@@ -8606,7 +8608,7 @@ async function fetchFromSpicyLyrics(
   }
 
   if (bestResult?.lyrics?.length) {
-    profile.finish({
+    if (typeof __DEV__ !== "undefined" && __DEV__) profile?.finish({
       ok: true,
       source: bestResult.source,
       lineCount: bestResult.lyrics.length,
@@ -8615,7 +8617,7 @@ async function fetchFromSpicyLyrics(
     });
     return bestResult;
   }
-  profile.finish({
+  if (typeof __DEV__ !== "undefined" && __DEV__) profile?.finish({
     ok: false,
     idResolvePath,
     candidateCount: spotifyTrackIds.length,
@@ -9997,14 +9999,13 @@ async function fetchFromLrcRed(track, { spotifyAccessToken = "" } = {}) {
         if (candidate.isrc === directIsrc && reportedIsrc && reportedIsrc !== directIsrc) return null;
         if (recording?.duration != null && !durationMatches(Number(recording.duration) * 1000)) return null;
         if (!identityMatch && recording?.title && !versionMatches(recording.title)) return null;
-        const tracePacket = {};
-        const trace = typeof __DEV__ !== 'undefined' && __DEV__ ? beginArrival(tracePacket, 'lrc-red') : undefined;
+        const trace = typeof __DEV__ !== 'undefined' && __DEV__ ? arrivalDiagnostics?.beginArrival({}, 'lrc-red') : undefined;
         const content = await fetchText(`https://lrc.red/s/${candidate.isrc}.ttml`, { headers: lrcRedHeaders, arrivalTrace: trace });
         if (!/^\s*(?:<\?xml\b[^?]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<(?:(?:\w+):)?tt\b/i.test(content) || !/<(?:p|span)\b[^>]*\bbegin\s*=/i.test(content)) return null;
         const timings = [...content.matchAll(/\b(?:begin|end)\s*=\s*["']([^"']+)["']/gi)];
         if (!timings.some(match => parseTtmlTimeExpression(match[1]) > 0)) return null;
-        const parsed = trace ? arrivalSpan(trace, 0, 'parser', () => parseTtmlToLyrics(content)) : parseTtmlToLyrics(content);
-        if (trace && parsed.lyrics) linkArrival(parsed.lyrics, trace);
+        const parsed = typeof __DEV__ !== 'undefined' && __DEV__ && trace && arrivalDiagnostics ? arrivalDiagnostics.arrivalSpan(trace, 0, 'parser', () => parseTtmlToLyrics(content)) : parseTtmlToLyrics(content);
+        if (typeof __DEV__ !== 'undefined' && __DEV__ && trace && parsed.lyrics) arrivalDiagnostics?.linkArrival(parsed.lyrics, trace);
         // Some TTML may omit the lrc.red namespace. The fetch itself identifies the format.
         if (!parsed.metadata?.ttml?.parentheticalBackgroundResolved) {
           Object.assign(parsed, parseTtmlToLyrics(content, { resolveParentheticalBackground: true }));
@@ -12499,7 +12500,7 @@ async function enrichLyricsWithGeminiTranslations(
   targetLanguage = ["English","Arabic","Bengali","Chinese (Simplified)","Chinese (Traditional)","Czech","Danish","Dutch","Finnish","French","German","Greek","Hebrew","Hindi","Hungarian","Indonesian","Italian","Japanese","Korean","Malay","Norwegian","Persian","Polish","Portuguese","Romanian","Russian","Spanish","Swedish","Tamil","Telugu","Thai","Turkish","Ukrainian","Urdu","Vietnamese"].includes(targetLanguage) ? targetLanguage : "English";
   const apiKey = String(geminiApiKey || "").trim();
   if (!apiKey) {
-    console.log(
+    if (typeof __DEV__ !== "undefined" && __DEV__) console.log(
       `[lyrics-translate] skipped: missing Gemini key for ${String(track?.title || "unknown title")} / ${String(track?.artist || "unknown artist")}`,
     );
     lyrics.translationMeta = {
@@ -12517,7 +12518,7 @@ async function enrichLyricsWithGeminiTranslations(
 
   const geminiCooldown = getGeminiCooldownInfo();
   if (geminiCooldown.active) {
-    console.log(
+    if (typeof __DEV__ !== "undefined" && __DEV__) console.log(
       `[lyrics-translate] skipped: cooldown active (${geminiCooldown.reason || "unknown"}, ${Math.ceil(geminiCooldown.remainingMs / 1000)}s) for ${String(track?.title || "unknown title")}`,
     );
     lyrics.translationMeta = {
@@ -12593,7 +12594,7 @@ async function enrichLyricsWithGeminiTranslations(
     cached.translations &&
     typeof cached.translations === "object"
   ) {
-    console.log(
+    if (typeof __DEV__ !== "undefined" && __DEV__) console.log(
       `[lyrics-translate] cache hit for ${String(track?.title || "unknown title")} (${uniqueLineMap.size} unique lines)`,
     );
     const cachedLyrics = lyrics.map((line) => {
@@ -12631,7 +12632,7 @@ async function enrichLyricsWithGeminiTranslations(
   let translationApiRequestMs = 0;
   let translationBridgeProcessingMs = 0;
   const translationStartedAt = Date.now();
-  console.log(
+  if (typeof __DEV__ !== "undefined" && __DEV__) console.log(
     `[lyrics-translate] start for ${String(track?.title || "unknown title")} / ${String(track?.artist || "unknown artist")}: ${uniqueLines.length} unique lines, source=${String(track?.source || "unknown")}`,
   );
 
@@ -12964,7 +12965,7 @@ async function enrichLyricsWithGeminiTranslations(
             model,
           });
           consecutiveInvalidPayloadCount = 0;
-          console.log(
+          if (typeof __DEV__ !== "undefined" && __DEV__) console.log(
             `[lyrics-translate] model ${model} success for ${allLines.length} lines`,
           );
           return translatedLines;
@@ -13029,7 +13030,7 @@ async function enrichLyricsWithGeminiTranslations(
             `Gemini chunk translation failed (expected ${chunk.lines.length} lines).`,
           );
         }
-        console.log(
+        if (typeof __DEV__ !== "undefined" && __DEV__) console.log(
           `[lyrics-translate] chunk ${chunkIndex + 1}/${chunkCount} translated (${chunk.lines.length} lines, startIndex=${chunk.startIndex})`,
         );
         return chunkTranslated;
@@ -13059,7 +13060,7 @@ async function enrichLyricsWithGeminiTranslations(
       : await requestGeminiFullLyrics(uniqueLines);
   } catch (error) {
     translationError = error;
-    console.warn(
+    if (typeof __DEV__ !== "undefined" && __DEV__) console.warn(
       `[lyrics-translate] full translation failed for ${String(track?.title || "unknown title")}: ${String(error?.message || error || "unknown")}`,
     );
   }
@@ -13073,14 +13074,14 @@ async function enrichLyricsWithGeminiTranslations(
       !isInvalidPayloadRetryStopError(message);
     if (shouldTryChunkedFallback) {
       try {
-        console.log(
+        if (typeof __DEV__ !== "undefined" && __DEV__) console.log(
           `[lyrics-translate] retrying chunked translation (${uniqueLines.length} lines)`,
         );
         translatedAll = await requestGeminiChunkedLyrics(uniqueLines);
         translationError = null;
       } catch (chunkError) {
         translationError = chunkError;
-        console.warn(
+        if (typeof __DEV__ !== "undefined" && __DEV__) console.warn(
           `[lyrics-translate] chunked translation failed for ${String(track?.title || "unknown title")}: ${String(chunkError?.message || chunkError || "unknown")}`,
         );
       }
@@ -13096,7 +13097,7 @@ async function enrichLyricsWithGeminiTranslations(
         ? "http-503"
         : "http-429";
       activateGeminiCooldown(reason, GEMINI_RATE_LIMIT_COOLDOWN_MS);
-      console.warn(
+      if (typeof __DEV__ !== "undefined" && __DEV__) console.warn(
         `[lyrics-translate] rate limited, cooldown activated (${Math.ceil(GEMINI_RATE_LIMIT_COOLDOWN_MS / 1000)}s)`,
       );
       lyrics.translationMeta = {
@@ -13132,7 +13133,7 @@ async function enrichLyricsWithGeminiTranslations(
     }
   }
 
-  console.log(
+  if (typeof __DEV__ !== "undefined" && __DEV__) console.log(
     `[lyrics-translate] completed for ${String(track?.title || "unknown title")}: translated ${Object.keys(translatedByText).length}/${uniqueLines.length} unique lines`,
   );
 
@@ -14773,7 +14774,7 @@ function createLyricsService({
         }
       };
 
-      console.log(
+      if (typeof __DEV__ !== "undefined" && __DEV__) console.log(
         `[lyrics-translate] translate-only for ${String(track.title || "unknown title")} using ${published.lyrics.length} published lines (source=${String(published.source || "unknown")})`,
       );
 
@@ -14855,7 +14856,7 @@ function createLyricsService({
           translationLanguage,
         );
         if (cachedSourcePacket) {
-          console.log(
+          if (typeof __DEV__ !== "undefined" && __DEV__) console.log(
             `[bridge-lyrics] per-source cache hit track=${cacheKey} source=${normalizedPreferredSource} lines=${cachedSourcePacket.lyrics.length}`,
           );
           lastDisplayedByTrack.set(cacheKey, cachedSourcePacket);
@@ -15482,11 +15483,10 @@ function createLyricsService({
         throw new Error("Lyrics vault is not initialized.");
       }
 
-      const tracePacket = {};
-      const trace = typeof __DEV__ !== 'undefined' && __DEV__ ? beginArrival(tracePacket, 'vault-ttml-import') : undefined;
-      if (trace) arrivalEvent(trace, 0, 'import-input-rn-received');
-      const parsed = trace ? arrivalSpan(trace, 0, 'parser', () => parseTtmlToLyrics(ttmlContent)) : parseTtmlToLyrics(ttmlContent);
-      if (trace && parsed.lyrics) linkArrival(parsed.lyrics, trace);
+      const trace = typeof __DEV__ !== 'undefined' && __DEV__ ? arrivalDiagnostics?.beginArrival({}, 'vault-ttml-import') : undefined;
+      if (typeof __DEV__ !== 'undefined' && __DEV__ && trace) arrivalDiagnostics?.arrivalEvent(trace, 0, 'import-input-rn-received');
+      const parsed = typeof __DEV__ !== 'undefined' && __DEV__ && trace && arrivalDiagnostics ? arrivalDiagnostics.arrivalSpan(trace, 0, 'parser', () => parseTtmlToLyrics(ttmlContent)) : parseTtmlToLyrics(ttmlContent);
+      if (typeof __DEV__ !== 'undefined' && __DEV__ && trace && parsed.lyrics) arrivalDiagnostics?.linkArrival(parsed.lyrics, trace);
       if (!parsed?.lyrics?.length) {
         throw new Error("TTML file did not contain any lyric lines.");
       }

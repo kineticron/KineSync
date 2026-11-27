@@ -1,4 +1,4 @@
-import type { ClockStamp } from './timing-diagnostics';
+import type { ClockStamp } from './timing-clock';
 
 export type DeliveryIdentity = Readonly<{ device: string; session: string; routeEpoch: number; authEpoch: number }>;
 type Entry = Readonly<{ serverMs: number; localEpochMs: number; receipt: ClockStamp }>;

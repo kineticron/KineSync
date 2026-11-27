@@ -122,7 +122,7 @@ class BridgeClient {
     const { serverUrl, handshakeKey } = usePlaybackStore.getState();
     const safeServerUrl = parseBridgeWebSocketUrl(serverUrl);
     if (!safeServerUrl) {
-      usePlaybackStore.getState().setErrorMessage("Set bridge URL first.");
+      usePlaybackStore.getState().setErrorMessage("Add your Desktop Bridge address in Settings.");
       return;
     }
     if (!isValidBridgeKey(handshakeKey)) {
@@ -214,11 +214,7 @@ class BridgeClient {
         if (packet.type !== "playback") {
           return;
         }
-        const { simulatedLatencyMs, packetDropRate } =
-          usePlaybackStore.getState();
-        if (Math.random() < packetDropRate) {
-          return;
-        }
+        if (typeof __DEV__ !== 'undefined' && __DEV__ && Math.random() < (usePlaybackStore.getState().packetDropRate ?? 0)) return;
         const receiptEpoch = playbackObservationEpoch();
         const applyPacket = () => {
           if (!alive() || !this.authenticated) return;
@@ -271,19 +267,22 @@ class BridgeClient {
             this.options.onTrackChange(packet);
           }
         };
-        if (simulatedLatencyMs > 0) {
-          const timer = setTimeout(() => {
-            this.delayedPackets.delete(timer);
-            applyPacket();
-          }, simulatedLatencyMs);
-          this.delayedPackets.add(timer);
-        } else {
-          applyPacket();
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          const latency = usePlaybackStore.getState().simulatedLatencyMs ?? 0;
+          if (latency > 0) {
+            const timer = setTimeout(() => {
+              this.delayedPackets.delete(timer);
+              applyPacket();
+            }, latency);
+            this.delayedPackets.add(timer);
+            return;
+          }
         }
+        applyPacket();
       } catch {
         usePlaybackStore
           .getState()
-          .setErrorMessage("Failed to decode playback packet.");
+          .setErrorMessage("Playback updates from Desktop Bridge could not be read. Check that both apps are up to date.");
       }
     };
 
@@ -298,7 +297,7 @@ class BridgeClient {
     ws.onerror = () => {
       if (!alive()) return;
       this.cleanupSocket();
-      usePlaybackStore.getState().setErrorMessage("Bridge connection failed.");
+      usePlaybackStore.getState().setErrorMessage("Could not connect to Desktop Bridge. Check that it is open and the address is correct.");
       usePlaybackStore.getState().setConnectionStatus("disconnected");
       stopPlaybackClock();
       this.scheduleReconnect();

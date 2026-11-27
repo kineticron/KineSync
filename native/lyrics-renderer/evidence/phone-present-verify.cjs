@@ -20,7 +20,7 @@ const commands = [
  ['baseline','node',['native/lyrics-renderer/evidence/phone-present-baseline.cjs']],
  ['alpha1','cargo',[...cargoArgs,'run','--locked',...manifest,'--','alpha-proof',path.join(artifacts,'alpha1'),'1']],
  ['alpha3','cargo',[...cargoArgs,'run','--locked',...manifest,'--','alpha-proof',path.join(artifacts,'alpha3'),'3']],
- ['benchmark','cargo',[...cargoArgs,'run','--locked',...manifest,'--','bench',path.join(artifacts,'benchmark.json'),'30','6',path.join(artifacts,'bench-png')]],
+ ['benchmark','cargo',[...cargoArgs,'run','--locked',...manifest,'--features','dev-render-metrics','--','bench',path.join(artifacts,'benchmark.json'),'30','6',path.join(artifacts,'bench-png')]],
  ['diff','git',['diff','--check']],
  ['lock','git',['diff','--exit-code','cbb467f','--','native/lyrics-renderer/Cargo.lock']],
  ['clipping-scroll','git',['diff','--exit-code','cbb467f','--','ExpoLyrics/app/(tabs)/index.tsx','native/lyrics-renderer/src/scene.rs','native/lyrics-renderer/src/motion.rs']],

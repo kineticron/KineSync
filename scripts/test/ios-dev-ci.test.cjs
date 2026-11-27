@@ -348,10 +348,11 @@ test('native lifecycle source harness flushes inactive updates and bounds paused
     assert.equal(state.dirty, true); assert.deepEqual(calls, ['dirty', 'refresh', 'lifecycle']);
   }
   const tick = body('tick'), retry = body('scheduleRetry'), mark = body('markDirty'), lifecycle = body('lifecycle');
-  assert.match(tick, /owner\.draw\(targetMs: display\.targetTimestamp \* 1000, resumeStepMs: resumeStepMs(?:, trace: trace)?\) \{ \[weak self\] result, renderedGeneration, settling, nextCue/);
-  assert.match(tick, /#if DEBUG\s+let trace = recordTrace\(display, start, \.request\)\s+#else\s+let trace: TraceFrameRequest\? = nil\s+#endif/);
+  assert.match(tick, /owner\.draw\(targetMs: display\.targetTimestamp \* 1000, resumeStepMs: resumeStepMs, request: request\) \{ \[weak self\] result, renderedGeneration, settling, nextCue/);
+  assert.match(tick, /#if DEBUG\s+let request = recordTrace\(display, start, \.request\)\s+#else\s+let request: FrameRequest\? = nil\s+#endif/);
+  assert.match(swift, /#if DEBUG\s+private struct FrameRequest: Sendable \{[^}]+\}\s+private struct TraceCapture: Sendable \{[^}]+\}\s+#else\s+private typealias FrameRequest = Void\s+#endif/);
   assert.match(swift, /#if DEBUG\s+Prop\("traceSession"\)[^\n]+\s+Prop\("tracePanelVisible"\)/);
-  assert.match(swift, /#if DEBUG\s+if let trace, let capture = self\.traceCapture, capture\.token == trace\.token,\s+capture\.generation == self\.currentGeneration \{\s+result = kr_frame_trace_render/);
+  assert.match(swift, /#if DEBUG\s+if let request, let capture = self\.traceCapture, capture\.token == request\.token,\s+capture\.generation == self\.currentGeneration \{\s+result = kr_frame_trace_render\(self\.handle, frameTarget, sampled, resumeStepMs, request\.id, request\.segment\)\s+\} else \{\s+result = kr_render\(self\.handle, frameTarget, sampled, resumeStepMs\)\s+\}\s+#else\s+result = kr_render\(self\.handle, frameTarget, sampled, resumeStepMs\)\s+#endif/);
   assert.match(body('syncTraceTimer'), /if tracePanelVisible, frameTrace != nil[\s\S]*?traceTimer\?\.invalidate\(\)/);
   assert.match(swift, /#if DEBUG\s+Events\("onStatus", "onFrameTrace", "onFrameTraceReset"\)\s+#else\s+Events\("onStatus"\)/);
   const attach = swift.slice(swift.indexOf('  override func didMoveToWindow()'), swift.indexOf('  override func layoutSubviews()'));
@@ -456,11 +457,11 @@ for (const shell of new Set([process.env.BASH32 || '/bin/bash', '/bin/bash'])) {
     const version = execFileSync(shell, ['--version'], { encoding: 'utf8' }).split('\n')[0];
     t.diagnostic(version);
     if (shell === process.env.BASH32) assert.match(version, /version 3\.2\./, 'BASH32 must name a real Bash 3.2 interpreter');
-    for (const [kind, features] of [['release', []], ['development', ['metal-surface', 'metrics/trace', 'dev-frame-trace']]]) {
+    for (const [kind, features] of [['release', []], ['development', ['metal-surface', 'metrics/trace', 'dev-frame-trace', 'dev-render-metrics']]]) {
       const root = temp(t), workspace = path.join(root, 'workspace with spaces'), bin = path.join(root, 'tools');
       fs.mkdirSync(workspace); fs.mkdirSync(bin);
       const buildConfig = structuredClone(config);
-      buildConfig.rust.features = features.filter(feature => feature !== 'dev-frame-trace');
+      buildConfig.rust.features = features.filter(feature => !config.developmentRustFeatures.includes(feature));
       put(workspace, 'scripts/ios-dev-ci/config.json', JSON.stringify(buildConfig));
       put(workspace, 'scripts/ios-dev-ci/rust-device.cjs', fs.readFileSync(path.join(repo, 'scripts/ios-dev-ci/rust-device.cjs')));
       put(workspace, 'native/lyrics-renderer/include/KineSyncLyrics.h', '/* fixture ABI header */');
@@ -585,14 +586,18 @@ else {
   assert.ok(fs.existsSync(path.join(destination, config.rust.framework)));
   const manifest = () => JSON.parse(fs.readFileSync(path.join(root, 'manifest.json')));
   assert.deepEqual(manifest().rust.features, []);
+  const traceMarker = '\n0000 T _kr_frame_trace_build_marker';
+  const metricsMarker = '\n0000 T _kr_render_metrics_build_marker';
   const dev = { KINESYNC_IOS_BUILD_KIND: 'development',
-    TEST_NM: env.TEST_NM + '\n0000 T _kr_frame_trace_build_marker' };
+    TEST_NM: env.TEST_NM + traceMarker + metricsMarker };
   assert.match(run('validate', dev).stderr, /source\/config identity mismatch/);
   assert.match(run('seal', { TEST_NM: dev.TEST_NM }).stderr, /trace feature mismatch/);
   assert.match(run('seal', { ...dev, TEST_NM: env.TEST_NM }).stderr, /trace feature mismatch/);
+  assert.match(run('seal', { TEST_NM: env.TEST_NM + metricsMarker }).stderr, /metrics feature mismatch/);
+  assert.match(run('seal', { ...dev, TEST_NM: env.TEST_NM + traceMarker }).stderr, /metrics feature mismatch/);
   const sealed = run('seal', dev);
   assert.equal(sealed.status, 0, sealed.stderr);
-  assert.deepEqual(manifest().rust.features, ['dev-frame-trace']);
+  assert.deepEqual(manifest().rust.features, ['dev-frame-trace', 'dev-render-metrics']);
   assert.match(run('validate').stderr, /source\/config identity mismatch/);
   const validated = run('validate', dev);
   assert.equal(validated.status, 0, validated.stderr);
@@ -669,7 +674,18 @@ test('native frame source contract uses display targets, one draw and asynchrono
   assert.match(swift, /guard self\.foreground, self\.tracePanelVisible, self\.traceSummaryRevision == summaryRevision/);
   const gpu = fs.readFileSync(path.join(repo, 'native/lyrics-renderer/src/gpu.rs'), 'utf8');
   assert.match(gpu, /render_frame_with_overlay\(scene, overlay, band, blur, false, appearance, glow\)/);
-  assert.match(gpu, /let timestamps = self.timestamps.as_ref\(\).filter\(\|_\| profile\)/);
+  const metricsOnly = String.raw`#\[cfg\(any\(test, feature = "dev-render-metrics"\)\)\]\s+`;
+  assert.match(gpu, new RegExp(metricsOnly + String.raw`timestamps: Option<Timestamps>,`));
+  assert.match(gpu, new RegExp(metricsOnly + String.raw`let \(adapter_name, capabilities, required_features\) = \{\s+let adapter_name = [^\n]+;\s+println!\([^\n]+\);\s+let wanted = Features::TIMESTAMP_QUERY \| Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;`));
+  assert.match(gpu, /#\[cfg\(not\(any\(test, feature = "dev-render-metrics"\)\)\)\]\s+let \(adapter_name, capabilities, required_features\) = \(String::new\(\), 3, Features::empty\(\)\);/);
+  assert.match(gpu, /\.request_device\(&DeviceDescriptor \{\s+label: Some\("lyrics-renderer"\),\s+required_features,/);
+  assert.match(gpu, new RegExp(metricsOnly + String.raw`let timestamps = \(!required_features\.is_empty\(\) && surface\.is_none\(\)\)\.then\(\|\| Timestamps \{\s+queries: device\.create_query_set\(`));
+  assert.match(gpu, new RegExp(metricsOnly + String.raw`let timestamps = self\.timestamps\.as_ref\(\)\.filter\(\|_\| wait_for_completion\);`));
+  const gatedTimestampWrite = String.raw`if let Some\(ts\) = timestamps \{[^}]*?encoder\.write_timestamp\(&ts\.queries, [01]\);`;
+  const timestampWrites = gpu.match(/\.write_timestamp\(/g) ?? [];
+  assert.equal(timestampWrites.length, 2);
+  assert.equal(gpu.match(new RegExp(metricsOnly + gatedTimestampWrite, 'g'))?.length, timestampWrites.length);
+  assert.match(gpu, new RegExp(metricsOnly + String.raw`let gpu_interval_ms = if let Some\(ts\) = timestamps \{\s+let data = read_buffer\(&self\.device, &ts\.readback\)\?;`));
   assert.match(gpu, /device.poll\(PollType::Poll\)/);
   assert.match(gpu, /on_submitted_work_done/);
   assert.match(swift, /frameTarget = max\(targetMs, sampled\)/);
@@ -737,7 +753,19 @@ test('Rust lyric surface keeps a full-size viewport, soft moving edge and real d
   assert.ok(!player.includes('!(__DEV__ && rustRenderer && !tour.active) && <Reanimated.View'));
   const view = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
   const overlay = fs.readFileSync(path.join(repo, 'ExpoLyrics/components/lyrics/rust/rust-fps-overlay.tsx'), 'utf8');
-  assert.match(view, /<NativeView\b[\s\S]*?\/> : null\}\s*<\/View>\s*\{__DEV__ && showRustDebugOverlay && !unavailable \? <RustFpsOverlay/);
+  assert.match(view, /<NativeView\b[\s\S]*?\{\.\.\.frameProps\} \/> : null\}\s*<\/View>\s*\{overlay\}/,
+    'The overlay remains a sibling outside the native gesture wrapper');
+  assert.match(view, /const \{ frameProps, overlay \}: Diagnostics = __DEV__ \? useRendererDiagnostics\(\{[\s\S]*?\}\) : \{\};/,
+    'Release must skip the diagnostics hook and supply no overlay or native trace props');
+  const diagnostics = view.match(/const useRendererDiagnostics:[^\n]+ = __DEV__\s*\? function useDebugDiagnostics\(([\s\S]*?)^  : \(\) => \(\{\}\);/m)?.[1];
+  assert.ok(diagnostics, 'The diagnostics implementation and its dependencies must live in a development-only branch');
+  assert.match(diagnostics, /const \{ RustFpsOverlay \} = require\('\.\/rust-fps-overlay'\)/);
+  assert.match(diagnostics, /require\('@\/lib\/rust-frame-trace'\)/);
+  assert.match(diagnostics, /overlay: showRustDebugOverlay && !unavailable \? <RustFpsOverlay/);
+  assert.doesNotMatch(view, /^import\s+(?!type\b)[^\n]+from ['"][^'"]*(?:rust-fps-overlay|rust-frame-trace)['"]/m);
+  for (const module of ["require('./rust-fps-overlay')", "require('@/lib/rust-frame-trace')"]) {
+    assert.equal(view.split(module).length, 2, `${module} must appear only inside the guarded implementation`);
+  }
   assert.doesNotMatch(view, /<ScrollView|fpsStrip/);
   assert.match(overlay, /<View pointerEvents="box-none" style=\{\[styles\.position,[^\n]+\]\} onLayout=\{measureBounds\}/);
   assert.match(overlay, /position: \{ position: 'absolute'/);
@@ -930,11 +958,13 @@ test('only iOS development selects trace and its source, artifact and Cargo keys
   const { effectiveRust } = require('../ios-dev-ci/rust-device.cjs');
   assert.deepEqual(config.rust.features, []);
   assert.deepEqual(effectiveRust(config, 'release').features, []);
-  assert.deepEqual(effectiveRust(config, 'development').features, ['dev-frame-trace']);
+  assert.deepEqual(effectiveRust(config, 'development').features, ['dev-frame-trace', 'dev-render-metrics']);
   assert.throws(() => effectiveRust(config, 'debug'), /Invalid KINESYNC_IOS_BUILD_KIND/);
-  const bad = structuredClone(config);
-  bad.rust.features.push('dev-frame-trace');
-  assert.throws(() => effectiveRust(bad, 'release'), /development-only/);
+  for (const feature of ['dev-frame-trace', 'dev-render-metrics']) {
+    const bad = structuredClone(config);
+    bad.rust.features.push(feature);
+    assert.throws(() => effectiveRust(bad, 'release'), /development-only/);
+  }
   assert.match(workflow, /KINESYNC_IOS_BUILD_KIND: development/);
   assert.match(release, /KINESYNC_IOS_BUILD_KIND: release/);
   assert.doesNotMatch(release, /KINESYNC_IOS_BUILD_KIND: development/);

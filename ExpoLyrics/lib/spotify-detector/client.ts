@@ -4,11 +4,12 @@ import { Buffer } from 'buffer';
 import { gzip } from 'pako';
 import { connectionIdFrom, decodeDealer, decodeStateBody, observerBody, observerEndpoint,
   sampleFrom, sampleWithContext, projectedPosition, type SelectedPlayerContext, spotifyHost, stateFingerprint, trackHex, metadataFrom, type TrackMetadata, type Sample } from './protocol';
-import { recordTiming, timingNow, type TimingContext } from './timing-diagnostics';
-import { logDevelopmentTiming } from './development-timing-log';
+import { timingNow, type TimingContext } from './timing-clock';
 import { DealerDeliveryBaseline, type DeliveryIdentity } from './dealer-delivery-baseline';
-import { logDealerDeliveryDecision } from './dealer-delivery-experiment-log';
-import { emitNativeClockDiagnostic, getNativeClockCapture, nativeClockCaptureActive } from '../native-clock-diagnostics';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const nativeClockDiagnostics = typeof __DEV__ !== 'undefined' && __DEV__ ? require('../native-clock-diagnostics') as typeof import('../native-clock-diagnostics') : null;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const deliveryDiagnostics = typeof __DEV__ !== 'undefined' && __DEV__ ? require('./dealer-delivery-experiment-log') as typeof import('./dealer-delivery-experiment-log') : null;
 const nativeDiagnosticsEnabled = typeof __DEV__ !== 'undefined' && __DEV__;
 let nextSourceClockScope = 0;
 const TRANSPORT_DEADLINE_MS = 5000;
@@ -23,6 +24,11 @@ const SNAPSHOT_PLAYING_MS = 15000;
 const RECONCILE_RETRY_MS = 500;
 const SNAPSHOT_PAUSED_MS = 30000;
 const SNAPSHOT_IDLE_MS = 60000;
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const timingDiagnostics = typeof __DEV__ !== 'undefined' && __DEV__ ? require('./timing-diagnostics') as typeof import('./timing-diagnostics') : null;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const developmentTimingLog = typeof __DEV__ !== 'undefined' && __DEV__ ? require('./development-timing-log') as typeof import('./development-timing-log') : null;
 
 type Callbacks = {
   sample: (sample: Sample) => void;
@@ -459,8 +465,8 @@ export class SpotifyDetector {
     if (enabled) {
       // Returning from suspension reprojects the last authoritative anchor.
       if (this.lastSample) {
-        recordTiming('foreground-replay', this.lastSample.timingProvenance);
-        logDevelopmentTiming('foreground-replay', this.lastSample);
+        if (typeof __DEV__ !== 'undefined' && __DEV__) timingDiagnostics?.recordTiming('foreground-replay', this.lastSample.timingProvenance);
+        if (typeof __DEV__ !== 'undefined' && __DEV__) developmentTimingLog?.logDevelopmentTiming('foreground-replay', this.lastSample);
         // Keep legacy fallback behavior; immutable provenance retains original receipt.
         this.callbacks.sample({ ...this.lastSample, receivedAt: this.runtime.wall(),
           // A cached replay cannot certify a newly authenticated/routed source.
@@ -484,7 +490,7 @@ export class SpotifyDetector {
       this.cachedFallbackPending = false;
       this.blocked = false;
     }
-    if (nativeDiagnosticsEnabled && nativeClockCaptureActive()) emitNativeClockDiagnostic('detector-refresh-before', {
+    if (nativeDiagnosticsEnabled && nativeClockDiagnostics?.nativeClockCaptureActive()) nativeClockDiagnostics?.emitNativeClockDiagnostic('detector-refresh-before', {
       generation: this.generation, reason: 'explicit-refresh', registered: this.registered,
       ...this.deliveryBaseline.diagnosticSummary() });
     if (this.canRenewLive()) this.startCapture(true, true);
@@ -629,7 +635,7 @@ export class SpotifyDetector {
     try {
       const response = await this.bounded(this.runtime.fetch(new URL(path, this.route).toString(), { method, headers, signal: controller.signal,
         ...(body !== undefined ? { body: Uint8Array.from(gzip(JSON.stringify(body))).buffer } : {}) }), controller);
-      if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('spotify-http-response', { endpoint: method === 'GET' ? 'metadata' : 'player-control',
+      if (nativeDiagnosticsEnabled) nativeClockDiagnostics?.emitNativeClockDiagnostic('spotify-http-response', { endpoint: method === 'GET' ? 'metadata' : 'player-control',
         method, status: response.status, requestGeneration: run, currentGeneration: this.generation,
         elapsedMs: this.runtime.mono() - started, staleGeneration: run !== this.generation, cacheProvenance: 'network-response' });
       if (controller.signal.aborted || run !== this.generation || requestConnection !== this.connectionId) throw new Error('Spotify session changed during request.');
@@ -768,7 +774,7 @@ export class SpotifyDetector {
       }
       return false;
     }
-    if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('source-candidate', { origin: timing.origin ?? 'unknown', generation: timing.generation,
+    if (nativeDiagnosticsEnabled) nativeClockDiagnostics?.emitNativeClockDiagnostic('source-candidate', { origin: timing.origin ?? 'unknown', generation: timing.generation,
       rawPosition: s.positionMs, playerTimestamp: s.positionTimestampMs, serverTimestamp: s.sourceServerTimestampMs,
       receiptWall: timing.receipt?.wallMs, receiptMono: timing.receipt?.monotonicMs, receivedAt,
       playing: s.playing,
@@ -789,22 +795,24 @@ export class SpotifyDetector {
     if (timing.origin === 'dealer' && (this.reconciling ||
         (bufferedDuringRegistration && (this.lastSample || this.lastSourceTimestamp))) &&
         (!s.positionTimestampMs || (!identityChanged && s.positionTimestampMs === this.lastSourceTimestamp))) {
-      this.logDeliveryRejection(s, timing.origin, 'dealer-without-newer-recovery-evidence');
+      if (typeof __DEV__ !== 'undefined' && __DEV__) this.logDeliveryRejection(s, timing.origin, 'dealer-without-newer-recovery-evidence');
       return true;
     }
     // A registration snapshot can predate a Dealer handoff on a different clock.
     // Comparing timestamps across those identities cannot order that race.
     if (timing.origin === 'registration' && !allowRegistrationHandoff && this.lastDealerConnection === connection && identityChanged) {
-      this.logDeliveryRejection(s, timing.origin, 'registration-conflicts-with-dealer-identity');
-      logDevelopmentTiming('registration-conflict', s);
-      recordTiming('stale', s.timingProvenance); return true;
+      if (typeof __DEV__ !== 'undefined' && __DEV__) this.logDeliveryRejection(s, timing.origin, 'registration-conflicts-with-dealer-identity');
+      if (typeof __DEV__ !== 'undefined' && __DEV__) developmentTimingLog?.logDevelopmentTiming('registration-conflict', s);
+      if (typeof __DEV__ !== 'undefined' && __DEV__) timingDiagnostics?.recordTiming('stale', s.timingProvenance);
+      return true;
     }
     // A stale packet cannot establish authority or close a registration
     // deadline, regardless of how the registration was started.
     if (!identityChanged && s.positionTimestampMs && s.positionTimestampMs < this.lastSourceTimestamp) {
-      this.logDeliveryRejection(s, timing.origin, 'source-timestamp-older-than-watermark');
-      logDevelopmentTiming('stale', s);
-      recordTiming('stale', s.timingProvenance); return true;
+      if (typeof __DEV__ !== 'undefined' && __DEV__) this.logDeliveryRejection(s, timing.origin, 'source-timestamp-older-than-watermark');
+      if (typeof __DEV__ !== 'undefined' && __DEV__) developmentTimingLog?.logDevelopmentTiming('stale', s);
+      if (typeof __DEV__ !== 'undefined' && __DEV__) timingDiagnostics?.recordTiming('stale', s.timingProvenance);
+      return true;
     }
     if (this.currentTarget !== (device ?? this.orderingDeviceId) || this.lastSample?.uri !== s.uri || this.lastSample?.playbackSessionId !== s.playbackSessionId) this.targetVersion++;
     if (identityChanged) {
@@ -830,10 +838,10 @@ export class SpotifyDetector {
         const accepted = this.deliveryBaseline.observeDealer(observation);
         if (diagnosticBaseline) {
           const decision = diagnosticBaseline.observeDealerDecision(observation);
-          logDealerDeliveryDecision('dealer-envelope', { ...decision, accepted });
+          deliveryDiagnostics?.logDealerDeliveryDecision('dealer-envelope', { ...decision, accepted });
         }
       } else if (nativeDiagnosticsEnabled) {
-        logDealerDeliveryDecision('dealer-envelope', { accepted: false, reason: 'dealer-missing-valid-timestamp-pair', sampleCount: 0 });
+        deliveryDiagnostics?.logDealerDeliveryDecision('dealer-envelope', { accepted: false, reason: 'dealer-missing-valid-timestamp-pair', sampleCount: 0 });
       }
     } else if (timing.origin === 'registration') {
       if (observation) {
@@ -841,11 +849,11 @@ export class SpotifyDetector {
         s.dealerDeliveryExcessMs = this.deliveryBaseline.registrationExcess(observation, s.playing);
         if (nativeDiagnosticsEnabled) {
           const decision = diagnosticBaseline!.registrationDecision(observation, s.playing);
-          logDealerDeliveryDecision('registration-correction', { ...decision, excessMs: s.dealerDeliveryExcessMs });
+          deliveryDiagnostics?.logDealerDeliveryDecision('registration-correction', { ...decision, excessMs: s.dealerDeliveryExcessMs });
         }
       } else {
         s.dealerDeliveryExcessMs = undefined;
-        if (nativeDiagnosticsEnabled) logDealerDeliveryDecision('registration-correction', {
+        if (nativeDiagnosticsEnabled) deliveryDiagnostics?.logDealerDeliveryDecision('registration-correction', {
           accepted: false, reason: 'registration-missing-valid-timestamp-pair', sampleCount: 0,
         });
       }
@@ -861,8 +869,8 @@ export class SpotifyDetector {
     if (key === this.fingerprint) {
       if (changedRestrictions) this.applyAuthoritativeState(restrictions, key);
       this.stateConfirmed(target, changedRestrictions);
-      logDevelopmentTiming('duplicate', s);
-      recordTiming('duplicate', s.timingProvenance);
+      if (typeof __DEV__ !== 'undefined' && __DEV__) developmentTimingLog?.logDevelopmentTiming('duplicate', s);
+      if (typeof __DEV__ !== 'undefined' && __DEV__) timingDiagnostics?.recordTiming('duplicate', s.timingProvenance);
       return true;
     }
     this.fingerprint = key;
@@ -870,8 +878,8 @@ export class SpotifyDetector {
     this.lastSample = s;
     this.applyAuthoritativeState(restrictions, key);
     this.stateConfirmed(target);
-    recordTiming('accepted', s.timingProvenance, { positionMs: s.positionMs, playing: s.playing });
-    logDevelopmentTiming('accepted', s);
+    if (typeof __DEV__ !== 'undefined' && __DEV__) timingDiagnostics?.recordTiming('accepted', s.timingProvenance, { positionMs: s.positionMs, playing: s.playing });
+    if (typeof __DEV__ !== 'undefined' && __DEV__) developmentTimingLog?.logDevelopmentTiming('accepted', s);
     this.callbacks.sample(s);
     return true;
   }
@@ -879,7 +887,7 @@ export class SpotifyDetector {
     if (!nativeDiagnosticsEnabled || (origin !== 'dealer' && origin !== 'registration')) return;
     const receipt = sample.positionObservedAt;
     const nowMono = this.runtime.mono();
-    logDealerDeliveryDecision(origin === 'dealer' ? 'dealer-envelope' : 'registration-correction', {
+    deliveryDiagnostics?.logDealerDeliveryDecision(origin === 'dealer' ? 'dealer-envelope' : 'registration-correction', {
       accepted: false, reason, playerTimestampMs: sample.positionTimestampMs,
       serverMs: sample.sourceServerTimestampMs, receiptWallMs: receipt?.wallMs,
       receiptMonotonicMs: receipt?.monotonicMs, nowMono,
@@ -1133,9 +1141,9 @@ export class SpotifyDetector {
     const connectionId = this.connectionId;
     const dealerRevision = this.dealerStateRevision;
     const reconcile = this.reconciling;
-    const requestCapture = nativeDiagnosticsEnabled ? getNativeClockCapture() : null;
+    const requestCapture = nativeDiagnosticsEnabled ? nativeClockDiagnostics?.getNativeClockCapture() : null;
     const requestStarted = nativeDiagnosticsEnabled ? this.runtime.mono() : 0;
-    if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('registration-request', { endpoint: 'connect-state-registration', method: 'PUT',
+    if (nativeDiagnosticsEnabled) nativeClockDiagnostics?.emitNativeClockDiagnostic('registration-request', { endpoint: 'connect-state-registration', method: 'PUT',
       requestGeneration: run, requestSwitchId: requestCapture?.switchId ?? null,
       registered: this.registered, cacheProvenance: 'network-request' });
     if (this.snapshotTimer) this.runtime.clearTimeout(this.snapshotTimer); this.snapshotTimer = null;
@@ -1168,19 +1176,19 @@ export class SpotifyDetector {
         return;
       }
       const headersAt = nativeDiagnosticsEnabled ? this.runtime.mono() : 0;
-      if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('registration-headers', { endpoint: 'connect-state-registration', status: response.status,
+      if (nativeDiagnosticsEnabled) nativeClockDiagnostics?.emitNativeClockDiagnostic('registration-headers', { endpoint: 'connect-state-registration', status: response.status,
         requestGeneration: run, requestSwitchId: requestCapture?.switchId ?? null,
         currentGeneration: this.generation, alive: alive(), elapsedMs: headersAt - requestStarted });
       const bytes = new Uint8Array(await this.bounded(response.arrayBuffer(), controller));
       const receipt = timingNow();
       let errorTag: string | null = null;
-      if (nativeDiagnosticsEnabled && !response.ok && nativeClockCaptureActive()) {
+      if (nativeDiagnosticsEnabled && !response.ok && nativeClockDiagnostics?.nativeClockCaptureActive()) {
         // Classify existing response bytes without logging the body or changing error handling.
         const text = new TextDecoder().decode(bytes.subarray(0, 8192));
         errorTag = /expired.?id/i.test(text) ? 'expired-id' : /connection.{0,8}not.{0,8}found/i.test(text) ? 'connection-not-found'
           : /device.{0,8}not.{0,8}found/i.test(text) ? 'device-not-found' : /gone/i.test(text) ? 'gone' : 'unclassified';
       }
-      if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('registration-body', { endpoint: 'connect-state-registration', status: response.status,
+      if (nativeDiagnosticsEnabled) nativeClockDiagnostics?.emitNativeClockDiagnostic('registration-body', { endpoint: 'connect-state-registration', status: response.status,
         requestGeneration: run, requestSwitchId: requestCapture?.switchId ?? null, currentGeneration: this.generation, alive: alive(), errorTag,
         requestMs: receipt.monotonicMs - requestStarted, bodyMs: receipt.monotonicMs - headersAt,
         bytes: bytes.length, pendingDealer: !!this.pendingState, cacheProvenance: 'network-response',
@@ -1206,7 +1214,7 @@ export class SpotifyDetector {
       if (alive() && bytes.length && !(reconcile && this.commandObserved)) this.emit(decoded, undefined,
         { receipt, origin: 'registration', connectionId: this.connectionId, generation: run }, sourceClockScope,
         { allowRegistrationHandoff: reconcile || (snapshot && dealerRevision === this.dealerStateRevision) });
-    } catch { if (nativeDiagnosticsEnabled) emitNativeClockDiagnostic('registration-error', { endpoint: 'connect-state-registration',
+    } catch { if (nativeDiagnosticsEnabled) nativeClockDiagnostics?.emitNativeClockDiagnostic('registration-error', { endpoint: 'connect-state-registration',
       requestGeneration: run, currentGeneration: this.generation, alive: alive(), elapsedMs: this.runtime.mono() - requestStarted,
       cacheProvenance: 'no-state-emitted' }); if (alive()) this.retryObservation(); }
     finally {

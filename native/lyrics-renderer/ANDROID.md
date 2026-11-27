@@ -1,10 +1,10 @@
 The Android renderer uses the existing Rust staticlib and an Expo Kotlin/JNI module. Build Rust before Expo prebuild or Gradle. The Android runtime loads the JNI shared library, not the Rust .a archive directly. The module's CMake build links that archive into the JNI library.
 
-From the repository root, run `bash scripts/build-rust-lyrics-android.sh`. This defaults to arm64-v8a and x86_64. Pass one ABI, a comma-separated ABI list, or `universal` to select architectures. Universal explicitly builds armeabi-v7a, arm64-v8a, x86, and x86_64 to match React Native's four-ABI APK. Unsupported ABI names fail immediately. A failed Rust build stops the workflow before Gradle, rather than producing an APK missing a requested renderer library.
+From the repository root, run `KINESYNC_BUILD_KIND=development bash scripts/build-rust-lyrics-android.sh` for Gradle's Debug variant. Use `KINESYNC_BUILD_KIND=release` for Release. The script defaults to Release and builds arm64-v8a and x86_64 by default. Pass one ABI, a comma-separated ABI list, or `universal` to select architectures. Universal explicitly builds armeabi-v7a, arm64-v8a, x86, and x86_64 to match React Native's four-ABI APK. Unsupported ABI names fail immediately. A failed Rust build stops the workflow before Gradle, rather than producing an APK missing a requested renderer library.
 
 Use Rust 1.97.0 and cargo-ndk 4.1.2. Install Java 17, Android SDK command-line tools, the platform and build tools required by the generated Expo project, and the NDK version from `ExpoLyrics/node_modules/react-native/gradle/libs.versions.toml`. Set ANDROID_HOME to the SDK and ANDROID_NDK_HOME to that NDK installation. The APK workflow installs the matching NDK and pinned Rust tooling. The build script installs only the requested Rust target standard libraries. It builds release-optimized, locked dependencies against Android API 24 even for development APKs.
 
-Each archive is copied from Cargo's target directory into `ExpoLyrics/modules/kinesync-rust-lyrics/android/src/main/jniLibs/ABI/liblyrics_renderer.a`. The script respects CARGO_TARGET_DIR and removes requested destination archives before rebuilding so an unsuccessful rebuild cannot be mistaken for a fresh one. cargo-ndk's output-directory option copies shared libraries, so the script copies static archives explicitly. Generated archives are not source files and must not be committed.
+Each archive is copied from Cargo's target directory into `ExpoLyrics/modules/kinesync-rust-lyrics/android/src/main/jniLibs/ABI/liblyrics_renderer.a`. The script respects CARGO_TARGET_DIR and removes requested destination archives before rebuilding so an unsuccessful rebuild cannot be mistaken for a fresh one. cargo-ndk's output-directory option copies shared libraries, so the script copies static archives explicitly. Rebuild the archives when switching Gradle variants. CMake checks each archive's diagnostics feature before linking the JNI library and rejects a mismatch. Generated archives are not source files and must not be committed.
 
 The Android APK workflow is `.github/workflows/android-apk.yml`. It builds Rust before Expo prebuild, then passes the exact same ABI list through `-PreactNativeArchitectures` to Gradle. A manual x86 dispatch still targets the existing 32-bit BlueStacks instance. All four architectures need real build verification before claiming universal support. Host Rust tests and shell mocks do not establish Android cross-compilation or JNI link success.
 
@@ -12,9 +12,9 @@ To verify unpushed code locally, use a disposable checkout containing the curren
 
 ```sh
 cargo +1.97.0 install cargo-ndk --version 4.1.2 --locked
-bash scripts/build-rust-lyrics-android.sh arm64-v8a
+KINESYNC_BUILD_KIND=development bash scripts/build-rust-lyrics-android.sh arm64-v8a
 cd ExpoLyrics
-npx --no-install expo prebuild --clean --platform android --no-install
+KINESYNC_BUILD_KIND=development npx --no-install expo prebuild --clean --platform android --no-install
 cd android
 ./gradlew --no-daemon --stacktrace --max-workers=2 '-Dorg.gradle.jvmargs=-Xmx3g' -PreactNativeArchitectures=arm64-v8a :app:assembleDebug
 ```

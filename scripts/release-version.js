@@ -22,4 +22,9 @@ if (new Set(versions).size !== 1) {
   throw new Error(`Release versions do not match: ${versions.join(', ')}`);
 }
 
+const expected = process.argv[2];
+if (expected !== undefined && versions[0] !== expected) {
+  throw new Error(`Expected release version ${expected}, found ${versions[0]}.`);
+}
+
 console.log(versions[0]);

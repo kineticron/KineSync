@@ -1,13 +1,8 @@
-/* global __dirname */
 // Execute the actual injected controller against normalized Android slider
 // shapes. Millisecond lyric timestamps must never be divided by slider units.
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const source = fs.readFileSync(path.join(__dirname, '../lib/spotify-browser.ts'), 'utf8');
-const marker = 'export const installBrowserControlScript = String.raw`';
-const start = source.indexOf(marker) + marker.length;
-const script = source.slice(start, source.indexOf('`;', start));
+const loadSpotifyBrowser = require('./load-spotify-browser.cjs');
+const { installBrowserControlScript: script } = loadSpotifyBrowser(false);
 
 async function run({ maximum = 1, minimum = 0, durationMs = 180000, connect = true, clocks = true, input = true, targetMs = 45000 } = {}) {
   const posted = [], events = [];

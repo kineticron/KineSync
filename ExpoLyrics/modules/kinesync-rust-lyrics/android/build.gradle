@@ -31,6 +31,23 @@ android {
       path "src/main/cpp/CMakeLists.txt"
     }
   }
+  buildTypes {
+    debug {
+      externalNativeBuild {
+        cmake {
+          arguments "-DKINESYNC_ANDROID_FRAME_DIAGNOSTICS=ON"
+        }
+      }
+    }
+    release {
+      consumerProguardFiles "release-rules.pro"
+      externalNativeBuild {
+        cmake {
+          arguments "-DKINESYNC_ANDROID_FRAME_DIAGNOSTICS=OFF"
+        }
+      }
+    }
+  }
   sourceSets {
     main {
       // Same OTFs as iOS. Shipped as raw assets at the asset root.

@@ -87,7 +87,7 @@ export type SpotifyBrowserFallbackHandle = {
   skipPrevious: () => void;
   skipNext: () => void;
   seekTo: (positionMs: number) => void;
-  runDiagnostics: () => void;
+  runDiagnostics?: () => void;
 };
 
 function getBrowserTrackId(metadata: BrowserTrackMetadata, _durationMs: number) {
@@ -101,7 +101,7 @@ function getBrowserTrackId(metadata: BrowserTrackMetadata, _durationMs: number) 
   ].join(":");
 }
 
-function formatDiagnostics(diagnostics: DiagnosticEvent) {
+const formatDiagnostics = __DEV__ ? function formatDiagnostics(diagnostics: DiagnosticEvent) {
   return [
     `mediaSession: ${diagnostics.mediaSession.playbackState}`,
     `setPositionState calls: ${diagnostics.mediaSession.setPositionStateCalls}`,
@@ -113,7 +113,35 @@ function formatDiagnostics(diagnostics: DiagnosticEvent) {
       `Connect observer: ${diagnostics.connectObserver.registered ? "registered" : diagnostics.connectObserver.found ? "pending" : "missing"}${diagnostics.connectObserver.error ? ` (${diagnostics.connectObserver.error})` : ""}`,
     ] : []),
   ].join("\n");
-}
+} : null;
+
+const useBrowserDiagnostics = __DEV__ ? function useBrowserDiagnostics() {
+  const [diagnostics, setDiagnostics] = useState<DiagnosticEvent | null>(null);
+  return { diagnostics, setDiagnostics };
+} : () => ({ diagnostics: null, setDiagnostics: undefined });
+
+const diagnosticsStyles = __DEV__ ? StyleSheet.create({
+  diagnosticsPanel: {
+    maxHeight: 110,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.1)",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  diagnosticsText: {
+    color: "rgba(248,248,254,0.78)",
+    fontFamily: Platform.select({
+      ios: "Menlo",
+      android: "monospace",
+      default: "monospace",
+    }),
+    fontSize: 11,
+    lineHeight: 16,
+  },
+}) : null;
+
+const BROWSER_LOAD_ERROR = "Couldn’t load Spotify. Check your connection and reload.";
 
 export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
   function SpotifyBrowserFallback(_props, ref) {
@@ -160,11 +188,9 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
     const [browserReady, setBrowserReady] = useState(false);
     const [browserLoading, setBrowserLoading] = useState(true);
     const [status, setStatus] = useState(
-      "Spotify browser is mounted for offline bridge fallback.",
+      "Connecting to Spotify…",
     );
-    const [diagnostics, setDiagnostics] = useState<DiagnosticEvent | null>(
-      null,
-    );
+    const { diagnostics, setDiagnostics } = useBrowserDiagnostics();
 
     const getActiveWebView = useCallback(
       () => webViewRefs.current.primary,
@@ -390,7 +416,6 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
       }
 
       enrichRef.current = { ...state, inFlightFor: trackId };
-      setStatus("Browser fallback timing active. Resolving Spotify catalog identity...");
       void (async () => {
         try {
           const match = await resolveSpotifyCatalogMatch({
@@ -405,7 +430,6 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           const currentDurationMs =
             playbackRef.current?.durationMs || current?.catalogDurationMs || 0;
           if (!match) {
-            setStatus("Spotify catalog enrichment returned no Spotify ID.");
             return;
           }
           if (
@@ -432,9 +456,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           }
         } catch (error) {
           if (!trackingAllowed()) return;
-          setStatus(
-            `Spotify catalog enrichment failed: ${error instanceof Error ? error.message : String(error)}`,
-          );
+          if (__DEV__) console.warn("Spotify track lookup failed", error);
         } finally {
           if (enrichRef.current.inFlightFor === trackId) {
             enrichRef.current = {
@@ -484,7 +506,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
 
       const metadata = metadataRef.current;
       if (!metadata?.title || !metadata.artist) {
-        setStatus("Spotify browser is active. Start a track to detect metadata.");
+        setStatus("Play a song in Spotify to see lyrics.");
         return;
       }
       requestCatalogEnrichment();
@@ -539,13 +561,10 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
       // a stable track identity change should clear and search for lyrics.
       if (result.trackChanged || spotifyIdentityChanged) {
         store.clearLyrics();
-        store.setLyricsStatusMessage("Browser playback active. Resolving Spotify track identity...");
+        store.setLyricsStatusMessage("Finding lyrics for this song…");
         scheduleLyricsRefresh(packetTrackId);
       }
-      const spotifyIdStatus = metadata.spotifyTrackId
-        ? ` Spotify ID ${metadata.spotifyTrackId.slice(0, 7)}… (${metadata.catalogResolved ? "catalog" : "browser"}).`
-        : " No Spotify ID yet.";
-      setStatus(`Browser fallback timing active via ${sample.source}.${spotifyIdStatus}`);
+      setStatus("Spotify playback connected.");
     }, [requestCatalogEnrichment, scheduleLyricsRefresh, trackingAllowed]);
 
     ingestRef.current = ingestBrowserPlayback;
@@ -647,7 +666,6 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
         skipNext: () => sendCommand({ type: "next" }),
         seekTo: (positionMs: number) =>
           sendCommand({ type: "seek", positionMs: Math.max(0, positionMs) }),
-        runDiagnostics: () => sendCommand({ type: "diagnostics" }),
       }),
       [openBrowser, refreshBrowser, sendCommand],
     );
@@ -670,7 +688,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
             </Text>
           </View>
           <View style={styles.headerActions}>
-            <NativeTouchable
+            {__DEV__ && <NativeTouchable
               accessibilityLabel="Run Spotify browser diagnostics"
               hitSlop={8}
               onPress={() => sendCommand({ type: "diagnostics" })}
@@ -680,7 +698,7 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
               ]}
             >
               <Ionicons name="pulse" size={18} color="#F8F8FE" />
-            </NativeTouchable>
+            </NativeTouchable>}
             <NativeTouchable
               accessibilityLabel="Reload Spotify browser"
               hitSlop={8}
@@ -706,9 +724,9 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
           </View>
         </SafeAreaView>
 
-        {diagnostics ? (
-          <ScrollView style={styles.diagnosticsPanel}>
-            <Text selectable style={styles.diagnosticsText}>
+        {__DEV__ && diagnostics && formatDiagnostics ? (
+          <ScrollView style={diagnosticsStyles?.diagnosticsPanel}>
+            <Text selectable style={diagnosticsStyles?.diagnosticsText}>
               {formatDiagnostics(diagnostics)}
             </Text>
           </ScrollView>
@@ -742,8 +760,8 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                   renderLoading={() => (
                     <BrowserMessage loading message="Loading Spotify in desktop mode..." />
                   )}
-                  renderError={(_domain, _code, description) => (
-                    <BrowserMessage message={description} />
+                  renderError={() => (
+                    <BrowserMessage message={BROWSER_LOAD_ERROR} />
                   )}
                   onLoadStart={() => {
                     if (browserGeneration !== browserGenerationRef.current || useSpotifySessionStore.getState().loggedOut) return;
@@ -759,21 +777,19 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                     setBrowserLoading(false);
                     setStatus("Spotify page loaded. Sign in and start a track.");
                   }}
-                  onHttpError={({ nativeEvent }) => {
+                  onHttpError={() => {
                     if (browserGeneration !== browserGenerationRef.current) return;
                     automaticRecoveryRef.current = false;
                     pendingRecoveryCommandRef.current = null;
                     setBrowserLoading(false);
-                    setStatus(
-                      `Spotify returned HTTP ${nativeEvent.statusCode}: ${nativeEvent.description}`,
-                    );
+                    setStatus(BROWSER_LOAD_ERROR);
                   }}
-                  onError={({ nativeEvent }) => {
+                  onError={() => {
                     if (browserGeneration !== browserGenerationRef.current) return;
                     automaticRecoveryRef.current = false;
                     pendingRecoveryCommandRef.current = null;
                     setBrowserLoading(false);
-                    setStatus(`Spotify browser error: ${nativeEvent.description}`);
+                    setStatus(BROWSER_LOAD_ERROR);
                   }}
                   onMessage={({ nativeEvent }: WebViewMessageEvent) => {
                     if (!trackingAllowed()) return;
@@ -807,15 +823,15 @@ export const SpotifyBrowserFallback = forwardRef<SpotifyBrowserFallbackHandle>(
                       return;
                     }
                     if (event.type === "error") {
-                      setStatus(event.message);
+                      if (__DEV__) console.debug("Spotify browser command failed", event.message);
+                      setStatus("Spotify couldn’t complete that action. Try again.");
                       return;
                     }
-                    if (event.type === "diagnostics") {
-                      setDiagnostics(event);
+                    if (__DEV__ && event.type === "diagnostics") {
+                      setDiagnostics?.(event);
                       return;
                     }
                     if (event.type === "spotifyToken" && event.token) {
-                      setStatus("Spotify access token captured for lyrics lookups.");
                       return;
                     }
                     if (event.type === "signedIn") {
@@ -932,24 +948,6 @@ const styles = StyleSheet.create({
   iconButtonPressed: {
     opacity: 0.74,
     transform: [{ scale: 0.96 }],
-  },
-  diagnosticsPanel: {
-    maxHeight: 110,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.1)",
-    backgroundColor: "rgba(255,255,255,0.04)",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  diagnosticsText: {
-    color: "rgba(248,248,254,0.78)",
-    fontFamily: Platform.select({
-      ios: "Menlo",
-      android: "monospace",
-      default: "monospace",
-    }),
-    fontSize: 11,
-    lineHeight: 16,
   },
   webViewStage: {
     flex: 1,

@@ -49,8 +49,8 @@ export function DesktopVaultCatalog({ disabled, onTransferred }: { disabled: boo
       });
       setTotal(result.total || 0);
       setNextOffset(result.nextOffset ?? null);
-    } catch (error) {
-      if (version === generation.current) setCatalogError(error instanceof Error ? error.message : String(error));
+    } catch {
+      if (version === generation.current) setCatalogError('Couldn’t load the desktop vault. Check your bridge connection and try again.');
     } finally {
       if (version === generation.current) { setLoading(false); pageLock.current = false; }
     }
@@ -73,9 +73,9 @@ export function DesktopVaultCatalog({ disabled, onTransferred }: { disabled: boo
     try {
       const result = await transferDesktopVaultToMobile((completed, total) => setProgress({ completed, total }));
       setNotice(result.failed
-        ? `Transferred ${result.transferred} of ${result.total} songs. ${result.failed} songs could not be transferred. ${result.error || ''}`
+        ? `Transferred ${result.transferred} of ${result.total} songs. ${result.failed} songs could not be transferred.`
         : result.total ? `Transferred all ${result.total} ${result.total === 1 ? 'song' : 'songs'} to this device.` : 'No desktop songs to transfer.');
-    } catch (error) { setNotice(error instanceof Error ? error.message : String(error)); }
+    } catch { setNotice('Couldn’t transfer the desktop vault. Check your bridge connection and try again.'); }
     finally {
       try { await onTransferred(); }
       finally { transferLock.current = false; setTransferring(false); }

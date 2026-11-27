@@ -1131,10 +1131,8 @@ export default function HomeScreen() {
         });
       }
     } catch (error) {
-      Alert.alert(
-        "GIF export failed",
-        error instanceof Error ? error.message : "Unable to create GIF.",
-      );
+      if (__DEV__) console.warn("GIF export failed", error);
+      Alert.alert("Couldn’t create the GIF", "Try exporting a shorter section of lyrics.");
     } finally {
       setShareBusy(false);
     }

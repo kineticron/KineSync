@@ -17,7 +17,69 @@ vm.runInNewContext(timingSource, { module: timing, exports: timing.exports, requ
 const staticSource = buildSync({ entryPoints: [path.join(app, 'components/lyrics/rust/static-lyrics-view.tsx')],
   bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic', write: false,
   external: ['react', 'react-native'], tsconfig: path.join(app, 'tsconfig.json') }).outputFiles[0].text;
-const compiled = transformSync(fs.readFileSync(path.join(app, 'components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8'), { loader: 'tsx', format: 'cjs', jsx: 'automatic' }).code;
+const rendererSource = fs.readFileSync(path.join(app, 'components/lyrics/rust/rust-lyrics-view.tsx'), 'utf8');
+const compiled = transformSync(rendererSource, { loader: 'tsx', format: 'cjs', jsx: 'automatic' }).code;
+const releaseChecks = [
+  ['components/lyrics/rust/rust-lyrics-view.tsx', /rust-fps-overlay|rust-frame-trace|Show Rust debug overlay|onFrameTrace|onMetrics|exportFrameTrace|lyrics-arrival-trace/],
+  ['app/(tabs)/explore.tsx', /Rust diagnostics|Show Rust debug overlay|showRustDebugOverlay|Simulated Latency|Packet Drop Rate|Raw GSMTC|Spotify Bearer Token/],
+  ['store/playback-store.ts', /kinesync_rust_debug_overlay|showRustDebugOverlay|setShowRustDebugOverlay|simulatedLatencyMs|packetDropRate|debuggerHost|timing-diagnostics|recordTiming|lyrics-arrival-trace/],
+  ['lib/bridge-client.ts', /simulatedLatencyMs|packetDropRate/],
+  ['lib/mobile-lyrics-service.js', /lyrics-arrival-trace|\[spicy-debug\]|\[spicy-profile\]|\[lyrics-translate\]/],
+  ['components/lyrics/settings-menu.tsx', /Bridge pipeline|native extrap/],
+  ['components/lyrics/spotify-browser-fallback.tsx', /Run Spotify browser diagnostics|setPositionState calls|safeWindowGlobals/],
+  ['components/lyrics/spotify-native-detector.tsx', /Spotify timing diagnostics|runDiagnostics|browser-http-410|native-clock-diagnostics/],
+  ['components/ui/launch-transition.tsx', /\[LaunchTransition\] Native splash/],
+  ['lib/spotify-browser.ts', /readDiagnostics|setPositionStateCalls|safeWindowGlobals/],
+  ...['binary', 'client', 'packet', 'protocol'].map(name => [
+    `lib/spotify-detector/${name}.ts`, /timing-diagnostics|development-timing-log|timingProvenance|recordTiming|native-clock-diagnostics|dealer-delivery-experiment-log/,
+  ]),
+  ['app/arrival-lab.tsx', /@\/components\/lyrics\/native\/arrival-lab/],
+  ['app/renderer-lab.tsx', /@\/components\/lyrics\/native\/renderer-lab/],
+];
+for (const [file, marker] of releaseChecks) {
+  const source = fs.readFileSync(path.join(app, file), 'utf8');
+  const transform = development => transformSync(source, {
+    loader: path.extname(file).slice(1), format: 'cjs', jsx: 'automatic',
+    define: { __DEV__: String(development) }, minifySyntax: true, treeShaking: true,
+  }).code;
+  assert.doesNotMatch(transform(false), marker, `Release bundle contains diagnostics from ${file}`);
+  assert.match(transform(true), marker, `Development bundle should retain diagnostics from ${file}`);
+}
+const configModule = { exports: {} };
+const eas = JSON.parse(fs.readFileSync(path.join(app, 'eas.json'), 'utf8'));
+assert.equal(eas.build.production.env?.KINESYNC_BUILD_KIND, 'release', 'EAS production must exclude Expo development tools');
+const configEnvironment = { env: { ...eas.build.production.env } };
+vm.runInNewContext(fs.readFileSync(path.join(app, 'app.config.js'), 'utf8'), { module: configModule, process: configEnvironment });
+const baseConfig = JSON.parse(fs.readFileSync(path.join(app, 'app.json'), 'utf8')).expo;
+const releasePlugins = configModule.exports({ config: baseConfig }).plugins;
+const devClient = releasePlugins.find(plugin => plugin[0] === 'expo-dev-client');
+assert.equal(devClient?.[1].addGeneratedScheme, false, 'Release prebuild must omit the Expo Dev Client scheme');
+const excludePlugin = './plugins/without-expo-dev-tools.js';
+assert.ok(releasePlugins.includes(excludePlugin), 'Release prebuild must exclude native Expo development packages');
+const { excludeAndroid, excludeIos } = require('../plugins/without-expo-dev-tools');
+const settingsGradle = excludeAndroid('expoAutolinking.useExpoModules()\n');
+const podfile = excludeIos('target "KineSync" do\n  use_expo_modules!\nend\n');
+assert.match(settingsGradle, /expoAutolinking\.exclude = .*"expo-dev-launcher".*"expo-dev-menu"/);
+assert.match(podfile, /use_expo_modules!\(exclude: %w\[.*expo-dev-launcher .*expo-dev-menu /);
+assert.equal(excludeAndroid(settingsGradle), settingsGradle);
+assert.equal(excludeIos(podfile), podfile);
+const buildProperties = baseConfig.plugins.find(plugin => plugin[0] === 'expo-build-properties');
+assert.equal(buildProperties?.[1].android.enableMinifyInReleaseBuilds, true, 'Production must run R8');
+const androidModule = path.join(app, 'modules/kinesync-rust-lyrics/android');
+const releaseRules = fs.readFileSync(path.join(androidModule, 'release-rules.pro'), 'utf8');
+assert.match(releaseRules, /-checkdiscard class dev\.kineticron\.rustlyrics\.FrameObserver/);
+assert.match(releaseRules, /-checkdiscard class dev\.kineticron\.rustlyrics\.FrameSample[\s\S]*?void emit\(\.\.\.\);/);
+assert.match(fs.readFileSync(path.join(androidModule, 'build.gradle'), 'utf8'), /release \{\s+consumerProguardFiles "release-rules.pro"/);
+configEnvironment.env.KINESYNC_BUILD_KIND = 'development';
+assert.equal(configModule.exports({ config: baseConfig }), baseConfig, 'Development prebuild keeps Expo Dev Client support');
+assert.ok(!baseConfig.plugins.includes(excludePlugin));
+const iosRelease = fs.readFileSync(path.join(app, '../.github/workflows/ios-unsigned-ipa.yml'), 'utf8');
+const androidRelease = fs.readFileSync(path.join(app, '../.github/workflows/android-apk.yml'), 'utf8');
+assert.match(iosRelease, /KINESYNC_BUILD_KIND: release/);
+assert.match(iosRelease, /Release ExpoModulesProvider registers Expo development tools/);
+assert.match(androidRelease, /KINESYNC_BUILD_KIND: .*'development' \|\| 'release'/);
+assert.match(iosRelease, /check-release-diagnostics\.cjs', 'ios'/);
+assert.match(androidRelease, /check-release-diagnostics\.cjs android KineSync-Android\.apk/);
 let state;
 let gesture;
 let seek = [];

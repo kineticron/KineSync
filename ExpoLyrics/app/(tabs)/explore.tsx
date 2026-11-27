@@ -155,11 +155,120 @@ async function resetOnboardingCompleted(): Promise<void> {
   }
 }
 
+const RustDiagnosticsSettings = __DEV__ ? function RustDiagnosticsSettings() {
+  const showRustDebugOverlay = usePlaybackStore(s => s.showRustDebugOverlay);
+  const setShowRustDebugOverlay = usePlaybackStore(s => s.setShowRustDebugOverlay);
+  return <>
+    <SettingSection title="Rust diagnostics">
+      <View style={styles.sectionToggle}>
+        <Text style={styles.fieldLabel}>Show Rust debug overlay</Text>
+        <Switch accessibilityLabel="Show Rust debug overlay" value={showRustDebugOverlay} onValueChange={setShowRustDebugOverlay} trackColor={_stableTrackColor1} thumbColor="#FFFFFF" />
+      </View>
+      <Text style={styles.fieldLabel}>Show status, controls, stats and the FPS strip. Errors are also logged when hidden.</Text>
+    </SettingSection>
+    <View style={styles.divider} />
+  </>;
+} : null;
+
+const timingStyles = __DEV__ ? StyleSheet.create({
+  panel: {
+    gap: 6,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  title: {
+    color: 'rgba(255,255,255,0.82)',
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  line: {
+    color: 'rgba(255,255,255,0.72)',
+    fontSize: 12,
+    lineHeight: 17,
+    fontVariant: ['tabular-nums'],
+  },
+}) : null;
+
+const useTimingDiagnostics = __DEV__ ? function useTimingDiagnostics() {
+  const simulatedLatencyMs = usePlaybackStore((s) => s.simulatedLatencyMs ?? 0);
+  const packetDropRate = usePlaybackStore((s) => s.packetDropRate ?? 0);
+  const driftOffset = usePlaybackStore((s) => s.driftOffset);
+  const setSimulatedLatencyMs = usePlaybackStore((s) => s.setSimulatedLatencyMs);
+  const setPacketDropRate = usePlaybackStore((s) => s.setPacketDropRate);
+  const [latencyInput, setLatencyInput] = useState(String(simulatedLatencyMs));
+  const [dropRateInput, setDropRateInput] = useState(String(packetDropRate));
+  const bridgeTiming = usePlaybackStore(s => s.bridgeTiming);
+
+  return {
+    apply() {
+      const latency = Math.max(0, Math.round(sanitizeNumberInput(latencyInput, simulatedLatencyMs)));
+      const dropRate = Math.max(0, Math.min(0.9, sanitizeNumberInput(dropRateInput, packetDropRate)));
+      setSimulatedLatencyMs?.(latency);
+      setPacketDropRate?.(dropRate);
+      setLatencyInput(String(latency));
+      setDropRateInput(String(dropRate));
+    },
+    panel: <View style={timingStyles?.panel}>
+      <Text style={timingStyles?.title}>Bridge timing (live)</Text>
+      <Text style={timingStyles?.line}>
+        Pipeline: {Math.max(0, Number(bridgeTiming.measuredPipelineMs || 0))} ms
+      </Text>
+      <Text style={timingStyles?.line}>
+        Forward bias: {Math.max(0, Number(bridgeTiming.estimatedForwardBiasMs || 0))} ms
+      </Text>
+      <Text style={timingStyles?.line}>
+        Native extrapolation: {bridgeTiming.nativeExtrapolationEnabled ? 'yes' : 'no'}
+      </Text>
+      <Text style={timingStyles?.line}>
+        Raw GSMTC position: {Math.max(0, Number(bridgeTiming.lastRawGsmtcPositionMs || 0))} ms
+      </Text>
+      <Text style={timingStyles?.line}>
+        Bridge projected: {Math.max(0, Number(bridgeTiming.projectedPositionMs || 0))} ms
+      </Text>
+      <Text style={timingStyles?.line}>
+        Phone network latency: {Math.max(0, Number(driftOffset || 0))} ms
+      </Text>
+    </View>,
+    fields: <>
+      <FieldRow
+        label="Simulated Latency"
+        value={latencyInput}
+        onChangeText={setLatencyInput}
+        keyboardType="numeric"
+        placeholder="0"
+      />
+      <FieldRow
+        label="Packet Drop Rate"
+        value={dropRateInput}
+        onChangeText={setDropRateInput}
+        keyboardType="decimal-pad"
+        placeholder="0"
+      />
+    </>,
+  };
+} : () => null;
+
+const useSpotifyTokenOverride = __DEV__ ? function useSpotifyTokenOverride() {
+  const [spotifyTokenInput, setSpotifyTokenInput] = useState('');
+  return {
+    spotifyTokenInput, setSpotifyTokenInput,
+    field: <FieldRow
+      label="Spotify Bearer Token"
+      value={spotifyTokenInput}
+      onChangeText={setSpotifyTokenInput}
+      placeholder="Auto-filled from Spotify browser"
+      secureTextEntry
+    />,
+  };
+} : () => ({ spotifyTokenInput: undefined, setSpotifyTokenInput: undefined, field: null });
+
 export default function BridgeSettingsScreen() {
   const router = useRouter();
   const showSpotifyStatusBar = usePlaybackStore(s => s.showSpotifyStatusBar);
-  const showRustDebugOverlay = usePlaybackStore(s => s.showRustDebugOverlay);
-  const setShowRustDebugOverlay = usePlaybackStore(s => s.setShowRustDebugOverlay);
   const setShowSpotifyStatusBar = usePlaybackStore(s => s.setShowSpotifyStatusBar);
   const showTranslatedText = usePlaybackStore(s => s.showTranslatedText);
   const setShowTranslatedText = usePlaybackStore(s => s.setShowTranslatedText);
@@ -173,23 +282,17 @@ export default function BridgeSettingsScreen() {
   const setHandshakeKey = usePlaybackStore((s) => s.setHandshakeKey);
   const setPlaybackModeStore = usePlaybackStore((s) => s.setPlaybackMode);
   const connectionStatus = usePlaybackStore((s) => s.connectionStatus);
-  const simulatedLatencyMs = usePlaybackStore((s) => s.simulatedLatencyMs);
-  const packetDropRate = usePlaybackStore((s) => s.packetDropRate);
   const playbackCompensationMs = usePlaybackStore((s) => s.playbackCompensationMs);
   const bridgeTiming = usePlaybackStore((s) => s.bridgeTiming);
-  const driftOffset = usePlaybackStore((s) => __DEV__ ? s.driftOffset : 0);
-  const setSimulatedLatencyMs = usePlaybackStore((s) => s.setSimulatedLatencyMs);
-  const setPacketDropRate = usePlaybackStore((s) => s.setPacketDropRate);
+  const timingDiagnostics = useTimingDiagnostics();
   const setPlaybackCompensationMs = usePlaybackStore((s) => s.setPlaybackCompensationMs);
   const [urlInput, setUrlInput] = useState(serverUrl);
   const [keyInput, setKeyInput] = useState(handshakeKey);
   const [compensationInput, setCompensationInput] = useState(String(playbackCompensationMs));
-  const [latencyInput, setLatencyInput] = useState(String(simulatedLatencyMs));
-  const [dropRateInput, setDropRateInput] = useState(String(packetDropRate));
-  const [spotifyTokenInput, setSpotifyTokenInput] = useState('');
+  const { spotifyTokenInput, setSpotifyTokenInput, field: spotifyTokenField } = useSpotifyTokenOverride();
   const [musixmatchTokenInput, setMusixmatchTokenInput] = useState('');
   const [musixmatchTokenStatus, setMusixmatchTokenStatus] = useState(
-    'Automatic token',
+    'Musixmatch connects automatically',
   );
   const [geminiKeyInput, setGeminiKeyInput] = useState('');
   const [mobileLyricsError, setMobileLyricsError] = useState('');
@@ -279,8 +382,8 @@ export default function BridgeSettingsScreen() {
       setPlaybackMode('desktop');
       setPlaybackModeStore('desktop');
       bridgeClient.reconnectNow();
-    } catch (error) {
-      setBridgeSaveError(error instanceof Error ? error.message : 'Could not save bridge settings.');
+    } catch {
+      setBridgeSaveError('Couldn’t save bridge settings. Try again.');
     }
   }, [keyInput, setHandshakeKey, setPlaybackModeStore, setServerUrl, urlInput]);
   useEffect(() => {
@@ -289,52 +392,51 @@ export default function BridgeSettingsScreen() {
       if (!mounted) {
         return;
       }
-      setSpotifyTokenInput(settings.spotifyWebToken);
+      if (__DEV__) setSpotifyTokenInput?.(settings.spotifyWebToken);
       setMusixmatchTokenInput(settings.musixmatchUserToken);
       const status = getMobileMusixmatchTokenStatus();
       setMusixmatchTokenStatus(
         status.manualOverrideConfigured
-          ? 'Using manual token'
+          ? 'Using your Musixmatch token'
           : status.automaticConfigured
-            ? 'Automatic token ready'
-            : 'Automatic token',
+            ? 'Musixmatch connected'
+            : 'Musixmatch connects automatically',
       );
       setGeminiKeyInput(settings.geminiApiKey);
     });
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [setSpotifyTokenInput]);
 
   const saveMobileLyricsApiSettings = useCallback(() => {
     setMobileLyricsError('');
     setMobileLyricsSaved(false);
     void saveMobileLyricsSettings({
-      spotifyWebToken: spotifyTokenInput,
-      spotifyWebTokenExpiresAt: 0,
+      ...(__DEV__ ? { spotifyWebToken: spotifyTokenInput, spotifyWebTokenExpiresAt: 0 } : {}),
       musixmatchUserToken: musixmatchTokenInput,
       geminiApiKey: geminiKeyInput,
     }).then((settings) => {
-      setSpotifyTokenInput(settings.spotifyWebToken);
+      if (__DEV__) setSpotifyTokenInput?.(settings.spotifyWebToken);
       setMusixmatchTokenInput(settings.musixmatchUserToken);
       const status = getMobileMusixmatchTokenStatus();
       setMusixmatchTokenStatus(
         status.manualOverrideConfigured
-          ? 'Using manual token'
+          ? 'Using your Musixmatch token'
           : status.automaticConfigured
-            ? 'Automatic token ready'
-            : 'Automatic token',
+            ? 'Musixmatch connected'
+            : 'Musixmatch connects automatically',
       );
       setGeminiKeyInput(settings.geminiApiKey);
       clearMobileLyricsCache();
       if (settings.persistence === 'memory') {
-        setMobileLyricsError(settings.persistenceError || 'Could not save API settings. Please try Save again.');
+        setMobileLyricsError('Couldn’t save API settings. Try again.');
         return;
       }
       setMobileLyricsSaved(true);
       setTimeout(() => setMobileLyricsSaved(false), 1800);
-    }).catch((error) => setMobileLyricsError(error instanceof Error ? error.message : 'Could not save API settings.'));
-  }, [geminiKeyInput, musixmatchTokenInput, spotifyTokenInput]);
+    }).catch(() => setMobileLyricsError('Couldn’t save API settings. Try again.'));
+  }, [geminiKeyInput, musixmatchTokenInput, spotifyTokenInput, setSpotifyTokenInput]);
 
   const handleBarcodeScanned = useCallback(
     ({ data }: { data: string }) => {
@@ -360,9 +462,9 @@ export default function BridgeSettingsScreen() {
             setPlaybackModeStore('desktop');
             setScannerOpen(false);
             bridgeClient.reconnectNow();
-          }).catch((error) => {
+          }).catch(() => {
             scanHandledRef.current = false;
-            setBridgeSaveError(error instanceof Error ? error.message : 'Could not save bridge settings.');
+            setBridgeSaveError('Couldn’t save bridge settings. Try again.');
           });
           return;
         }
@@ -428,25 +530,8 @@ export default function BridgeSettingsScreen() {
     const compensation = Math.round(sanitizeNumberInput(compensationInput, playbackCompensationMs));
     setPlaybackCompensationMs(compensation);
     setCompensationInput(String(compensation));
-    if (__DEV__) {
-      const latency = Math.max(0, Math.round(sanitizeNumberInput(latencyInput, simulatedLatencyMs)));
-      const dropRate = Math.max(0, Math.min(0.9, sanitizeNumberInput(dropRateInput, packetDropRate)));
-      setSimulatedLatencyMs(latency);
-      setPacketDropRate(dropRate);
-      setLatencyInput(String(latency));
-      setDropRateInput(String(dropRate));
-    }
-  }, [
-    compensationInput,
-    dropRateInput,
-    latencyInput,
-    packetDropRate,
-    playbackCompensationMs,
-    setPacketDropRate,
-    setPlaybackCompensationMs,
-    setSimulatedLatencyMs,
-    simulatedLatencyMs,
-  ]);
+    if (__DEV__) timingDiagnostics?.apply();
+  }, [compensationInput, playbackCompensationMs, setPlaybackCompensationMs, timingDiagnostics]);
 
   const handleShowOnboarding = useCallback(async () => {
     await resetOnboardingCompleted();
@@ -597,7 +682,7 @@ export default function BridgeSettingsScreen() {
                     if (spotifySignedIn) {
                       useSpotifySessionStore.getState().setLoggedOut(true);
                       requestLogoutSpotifyBrowser();
-                      setSpotifyTokenInput('');
+                      if (__DEV__) setSpotifyTokenInput?.('');
                       void saveMobileLyricsSettings({ spotifyWebToken: '', spotifyWebTokenExpiresAt: 0 });
                       usePlaybackStore.setState({ currentTrack: null, lyrics: [], isPlaying: false });
                     } else {
@@ -643,29 +728,14 @@ export default function BridgeSettingsScreen() {
               </SettingSection>
               <View style={styles.divider} />
 
-              {__DEV__ ? <>
-                <SettingSection title="Rust diagnostics">
-                  <View style={styles.sectionToggle}>
-                    <Text style={styles.fieldLabel}>Show Rust debug overlay</Text>
-                    <Switch accessibilityLabel="Show Rust debug overlay" value={showRustDebugOverlay} onValueChange={setShowRustDebugOverlay} trackColor={_stableTrackColor1} thumbColor="#FFFFFF" />
-                  </View>
-                  <Text style={styles.fieldLabel}>Show status, controls, stats and the FPS strip. Errors are also logged when hidden.</Text>
-                </SettingSection>
-                <View style={styles.divider} />
-              </> : null}
+              {__DEV__ && RustDiagnosticsSettings ? <RustDiagnosticsSettings /> : null}
 
               {playbackMode === 'mobile' ? <SettingSection title="Advanced" collapsible>
                 {spotifySignedIn && <Pressable style={styles.secondaryButton} onPress={requestOpenSpotifyBrowser}>
                   <Ionicons name="musical-notes-outline" size={18} color="#FFFFFF" />
                   <Text style={styles.secondaryButtonText}>Spotify player</Text>
                 </Pressable>}
-                <FieldRow
-                  label="Spotify Bearer Token"
-                  value={spotifyTokenInput}
-                  onChangeText={setSpotifyTokenInput}
-                  placeholder="Auto-filled from Spotify browser"
-                  secureTextEntry
-                />
+                {spotifyTokenField}
                 <FieldRow
                   label="Musixmatch User API Token (Manual Override)"
                   value={musixmatchTokenInput}
@@ -698,27 +768,7 @@ export default function BridgeSettingsScreen() {
               </SettingSection> : null}
 
               {playbackMode === 'desktop' ? <SettingSection title={__DEV__ ? 'Timing diagnostics' : 'Playback timing'} collapsible>
-                {__DEV__ && <View style={styles.timingDiagnostics}>
-                  <Text style={styles.timingDiagnosticsTitle}>Bridge timing (live)</Text>
-                  <Text style={styles.timingDiagnosticsLine}>
-                    Pipeline: {Math.max(0, Number(bridgeTiming.measuredPipelineMs || 0))} ms
-                  </Text>
-                  <Text style={styles.timingDiagnosticsLine}>
-                    Forward bias: {Math.max(0, Number(bridgeTiming.estimatedForwardBiasMs || 0))} ms
-                  </Text>
-                  <Text style={styles.timingDiagnosticsLine}>
-                    Native extrapolation: {bridgeTiming.nativeExtrapolationEnabled ? 'yes' : 'no'}
-                  </Text>
-                  <Text style={styles.timingDiagnosticsLine}>
-                    Raw GSMTC position: {Math.max(0, Number(bridgeTiming.lastRawGsmtcPositionMs || 0))} ms
-                  </Text>
-                  <Text style={styles.timingDiagnosticsLine}>
-                    Bridge projected: {Math.max(0, Number(bridgeTiming.projectedPositionMs || 0))} ms
-                  </Text>
-                  <Text style={styles.timingDiagnosticsLine}>
-                    Phone network latency: {Math.max(0, Number(driftOffset || 0))} ms
-                  </Text>
-                </View>}
+                {timingDiagnostics?.panel}
                 <Pressable
                   style={({ pressed }) => [
                     styles.secondaryButton,
@@ -739,22 +789,7 @@ export default function BridgeSettingsScreen() {
                   keyboardType="numeric"
                   placeholder="0"
                 />
-                {__DEV__ && <>
-                  <FieldRow
-                    label="Simulated Latency"
-                    value={latencyInput}
-                    onChangeText={setLatencyInput}
-                    keyboardType="numeric"
-                    placeholder="0"
-                  />
-                  <FieldRow
-                    label="Packet Drop Rate"
-                    value={dropRateInput}
-                    onChangeText={setDropRateInput}
-                    keyboardType="decimal-pad"
-                    placeholder="0"
-                  />
-                </>}
+                {timingDiagnostics?.fields}
                 <Pressable
                   style={({ pressed }) => [
                     styles.secondaryButton,
@@ -1096,32 +1131,6 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.72)',
     fontSize: 13,
     fontWeight: '600',
-  },
-  timingDiagnostics: {
-    gap: 6,
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-  },
-  timingDiagnosticsTitle: {
-    color: 'rgba(255,255,255,0.82)',
-    fontSize: 13,
-    fontWeight: '700',
-    marginBottom: 2,
-  },
-  timingDiagnosticsLine: {
-    color: 'rgba(255,255,255,0.72)',
-    fontSize: 12,
-    lineHeight: 17,
-    fontVariant: ['tabular-nums'],
-  },
-  timingDiagnosticsHint: {
-    color: 'rgba(255,255,255,0.48)',
-    fontSize: 11,
-    lineHeight: 15,
-    marginTop: 4,
   },
   onboardingHint: {
     color: Design.muted,
