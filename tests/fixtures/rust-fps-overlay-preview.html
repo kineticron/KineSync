@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KineSync renderer pacing overlay · mock</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #090b0d; color: #f1f4f5; font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 402px), 402px)); justify-content: center; gap: 24px; padding: 18px 0; }
+  figure { margin: 0; }
+  figcaption { padding: 0 12px 8px; color: #bac5c9; font-size: 12px; font-weight: 600; }
+  .phone { position: relative; overflow: hidden; height: 874px; background: linear-gradient(150deg, #322e37, #191c24 52%, #162a2d); }
+  .status { position: absolute; top: 23px; left: 28px; right: 28px; display: flex; justify-content: space-between; font-weight: 700; }
+  .track { position: absolute; top: 65px; left: 25px; }
+  .track strong { display: block; font-size: 15px; }
+  .track span { color: #bac5c9; }
+  .canvas { position: absolute; inset: 112px 0 0; overflow: hidden; }
+  .lyrics { position: absolute; inset: 0; padding: 12px 25px 24px; }
+  .lyrics p { margin: 0 0 41px; font-size: 32px; font-weight: 740; line-height: 1.15; letter-spacing: -0.7px; color: #b8bdc3; }
+  .lyrics .dim { opacity: 0.36; }
+  .lyrics .active { color: #fff8f4; }
+  .lyrics .active span { color: #c3eee0; }
+  .lyrics .translation { display: block; margin-top: 7px; font-size: 15px; font-weight: 500; letter-spacing: 0; color: #c3cbca; }
+  .transport { position: absolute; bottom: 27px; left: 25px; right: 25px; background: #171c21; padding: 14px 17px; border-radius: 22px; }
+  .progress { height: 3px; margin-bottom: 12px; border-radius: 2px; background: linear-gradient(to right, #dce6e5 36%, #50575a 36%); }
+  .transport nav { display: flex; justify-content: space-around; align-items: center; font-size: 19px; }
+  .panel { position: absolute; z-index: 10; top: 8px; right: 12px; width: min(calc(100% - 24px), 350px); border-radius: 14px; padding: 8px 10px; background: rgba(22, 25, 28, 0.94); pointer-events: none; }
+  .readout { display: grid; gap: 3px; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  .title { margin: 0; font-size: 13px; font-weight: 700; }
+  .phase, .secondary { margin: 0; color: #bac5c9; font-size: 11px; font-variant-numeric: tabular-nums; }
+  .label { color: #e1e8ea; font-size: 11px; }
+  .columns { display: flex; gap: 4px; font-variant-numeric: tabular-nums; }
+  .columns span { width: 38px; text-align: right; font-size: 11px; }
+  .columns.heading span { color: #bac5c9; font-size: 10px; }
+  .good { color: #76e0cb; }
+  .warn { color: #f8ce79; }
+  .bad { color: #ff9b9b; }
+  .controls { display: flex; flex-wrap: wrap; gap: 3px; }
+  button { min-height: 40px; padding: 0 7px; border: 0; color: #c9f6ea; background: transparent; font-family: inherit; font-size: 12px; font-weight: 600; pointer-events: auto; }
+  html[data-preview="healthy"] figure[data-state="warning"],
+  html[data-preview="warning"] figure[data-state="healthy"] { display: none; }
+</style>
+<main aria-label="Mock diagnostics above full-height sample lyrics">
+  <figure data-state="healthy">
+    <figcaption>MOCK · healthy · Spicy translated</figcaption>
+    <div class="phone">
+      <div class="status"><span>9:41</span><span>◉ ▰</span></div>
+      <div class="track"><strong>Porch Light</strong><span>Evening Lines</span></div>
+      <div class="canvas">
+        <div class="lyrics">
+          <p class="dim">The rain lets up on the avenue</p>
+          <p class="dim">And every window takes the blue</p>
+          <p class="active"><span>Leave the porch light</span> on for me<small class="translation" lang="es">Deja la luz del porche encendida para mí</small></p>
+          <p>I’ll follow it past the sycamore<small class="translation" lang="es">La seguiré más allá del sicómoro</small></p>
+          <p class="dim">Across the yard and through the door</p>
+          <p class="dim">Until the street goes quiet</p>
+        </div>
+        <aside class="panel" aria-label="Healthy mock pacing values">
+          <div class="controls"><button>Stop</button><button>Share</button><button>Hide</button><button>Details</button></div>
+          <div class="readout">
+            <div class="row"><h2 class="title">Renderer pacing</h2><span class="phase">Active</span></div>
+            <p class="secondary">Active · 120 callbacks/s · 120 calls/s · 8.33 ms budget</p>
+            <p class="secondary">Window · 112 callbacks/s · 112 calls/s</p>
+            <p class="secondary">Estimated callback gaps 0 · Drawable gaps unavailable</p>
+            <div class="row"><span class="label">Active segment · ms</span><div class="columns heading"><span>p50</span><span>p95</span><span>Worst</span></div></div>
+            <div class="row"><span class="label">Callback interval</span><div class="columns"><span>8.3</span><span class="good">8.4</span><span>8.5</span></div></div>
+            <div class="row"><span class="label">Present-call interval</span><div class="columns"><span>8.3</span><span class="good">8.6</span><span>9.2</span></div></div>
+            <div class="row"><span class="label">CPU encode</span><div class="columns"><span>2.1</span><span class="good">2.6</span><span>3.5</span></div></div>
+            <div class="row"><span class="label">GPU queue elapsed</span><div class="columns"><span>3.4</span><span class="good">4.5</span><span>5.1</span></div></div>
+          </div>
+        </aside>
+      </div>
+      <div class="transport"><div class="progress"></div><nav aria-label="Mock playback controls"><span>⏮</span><span>Ⅱ</span><span>⏭</span></nav></div>
+    </div>
+  </figure>
+  <figure data-state="warning">
+    <figcaption>MOCK · warning · AMLL far-return</figcaption>
+    <div class="phone">
+      <div class="status"><span>9:41</span><span>◉ ▰</span></div>
+      <div class="track"><strong>Porch Light</strong><span>Evening Lines</span></div>
+      <div class="canvas">
+        <div class="lyrics">
+          <p class="dim">And every window takes the blue</p>
+          <p class="dim">Leave the porch light on for me</p>
+          <p class="active"><span>I’ll follow it</span> past the sycamore</p>
+          <p>Across the yard and through the door</p>
+          <p class="dim">Until the street goes quiet</p>
+          <p class="dim">And we can hear the evening turn</p>
+        </div>
+        <aside class="panel" aria-label="Warning mock pacing values">
+          <div class="controls"><button>Stop</button><button>Share</button><button>Hide</button><button>Details</button></div>
+          <div class="readout">
+            <div class="row"><h2 class="title">Renderer pacing</h2><span class="phase">Active</span></div>
+            <p class="secondary">Active · 116 callbacks/s · 89 calls/s · 8.33 ms budget</p>
+            <p class="secondary">Window · 78 callbacks/s · 61 calls/s</p>
+            <p class="secondary">Estimated callback gaps 16 · Drawable gaps unavailable</p>
+            <div class="row"><span class="label">Active segment · ms</span><div class="columns heading"><span>p50</span><span>p95</span><span>Worst</span></div></div>
+            <div class="row"><span class="label">Callback interval</span><div class="columns"><span>8.3</span><span class="good">8.4</span><span>25.0</span></div></div>
+            <div class="row"><span class="label">Present-call interval</span><div class="columns"><span>8.6</span><span class="bad">17.1</span><span>34.2</span></div></div>
+            <div class="row"><span class="label">CPU encode</span><div class="columns"><span>4.9</span><span class="warn">9.2</span><span>12.3</span></div></div>
+            <div class="row"><span class="label">GPU queue elapsed</span><div class="columns"><span>5.3</span><span class="warn">9.6</span><span>11.6</span></div></div>
+          </div>
+        </aside>
+      </div>
+      <div class="transport"><div class="progress"></div><nav aria-label="Mock playback controls"><span>⏮</span><span>Ⅱ</span><span>⏭</span></nav></div>
+    </div>
+  </figure>
+</main>
+<script>
+  const state = new URLSearchParams(location.search).get('state');
+  if (state === 'healthy' || state === 'warning') document.documentElement.dataset.preview = state;
+</script>
+</html>
