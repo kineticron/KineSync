@@ -7,6 +7,8 @@ pub mod appearance;
 mod auxiliary;
 mod credits;
 pub mod ffi;
+#[cfg(test)]
+mod fps_budget;
 pub mod gpu;
 mod interlude;
 #[cfg(any(target_os = "ios", test))]
