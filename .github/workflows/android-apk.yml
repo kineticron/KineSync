@@ -412,12 +412,12 @@ jobs:
               kib=$(( kib + size ))
             fi
           done
-          echo "Android Rust files before Rust Cache pruning: $kib KiB (save limit: 2621440 KiB)"
+          echo "Android Rust files before Rust Cache pruning: $kib KiB (save limit: 3407872 KiB)"
           rust_kib=$kib
           kib=$(du -sk "$CARGO_HOME"/bin/cargo-ndk* | awk '{sum += $1} END {print sum+0}')
           echo "cargo-ndk binaries: $kib KiB (save limit: 65536 KiB)"
           if (( kib <= 65536 )); then echo 'ndk=true' >> "$GITHUB_OUTPUT"; fi
-          if [[ "$RUST_CACHE_RESTORED" == success ]] && (( rust_kib <= 2621440 )); then echo 'RUST_CACHE_WITHIN_BUDGET=true' >> "$GITHUB_ENV"; fi
+          if [[ "$RUST_CACHE_RESTORED" == success ]] && (( rust_kib <= 3407872 )); then echo 'RUST_CACHE_WITHIN_BUDGET=true' >> "$GITHUB_ENV"; fi
 
       - name: Save cargo-ndk binaries
         id: save_ndk
@@ -443,8 +443,8 @@ jobs:
           done
           if (( ${#paths[@]} == 0 )); then exit 0; fi
           kib=$(du -sk "${paths[@]}" | awk '{sum += $1} END {print sum+0}')
-          echo "Gradle downloads: $kib KiB (save limit: 1048576 KiB)"
-          if (( kib <= 1048576 )); then echo 'within-budget=true' >> "$GITHUB_OUTPUT"; fi
+          echo "Gradle downloads: $kib KiB (save limit: 1677722 KiB)"
+          if (( kib <= 1677722 )); then echo 'within-budget=true' >> "$GITHUB_OUTPUT"; fi
 
       - name: Save Gradle downloads
         id: save_gradle
