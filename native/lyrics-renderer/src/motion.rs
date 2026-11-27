@@ -20,6 +20,7 @@ pub const AMLL_SETTLE_VELOCITY: f64 = 0.01;
 const MAX_SEGMENTS: usize = 8;
 const AMLL_RETURN_MIN_MS: f64 = 500.0;
 const AMLL_RETURN_MAX_MS: f64 = 700.0;
+pub(crate) const AMLL_RETURN_MAX_STEP_MS: f64 = 1000.0 / 60.0;
 /// iOS `UIScrollView.DecelerationRate.normal`, applied per millisecond.
 const FLING_DECELERATION: f64 = 0.998;
 /// Velocity below which the fling hands over to the rebound spring (pt/ms).
@@ -114,6 +115,8 @@ struct Segment {
 #[derive(Clone, Copy, Debug)]
 struct AmllReturn {
     deadline_playback: Option<f64>,
+    // Missed submissions extend motion time without changing cue ownership.
+    cue_deadline_ms: f64,
     from: f64,
     target: f64,
     start_ms: f64,
@@ -163,9 +166,20 @@ pub(crate) struct ReturnFrame {
 }
 
 impl ReturnFrame {
+    pub(crate) fn continuing(&self) -> bool {
+        self.next.is_some()
+    }
+
+    pub(crate) fn delay_by(&mut self, delay_ms: f64) {
+        if let Some(curve) = &mut self.next {
+            curve.start_ms += delay_ms;
+            curve.end_ms += delay_ms;
+        }
+    }
+
     pub(crate) fn project_deadline(&mut self, project: impl FnOnce(f64) -> f64) {
         if let Some(curve) = &mut self.next {
-            curve.deadline_playback = Some(project(curve.end_ms));
+            curve.deadline_playback = Some(project(curve.cue_deadline_ms));
         }
     }
 }
@@ -753,6 +767,7 @@ impl FollowScroll {
                 position,
                 next: Some(AmllReturn {
                     deadline_playback: None,
+                    cue_deadline_ms: now_ms + duration,
                     from: position,
                     target,
                     start_ms: now_ms,
@@ -781,11 +796,9 @@ impl FollowScroll {
             // Reversal starts with the sampled tangent. Brake away from the
             // new endpoint briefly, then use the rest of the same deadline.
             Some(AmllReturn {
-                deadline_playback: returning.deadline_playback,
                 from: position,
                 target,
                 start_ms: now_ms,
-                end_ms: returning.end_ms,
                 velocity,
                 brake_ms: Self::return_brake(
                     velocity,
@@ -793,6 +806,7 @@ impl FollowScroll {
                     target - position,
                     self.viewport / pixels_per_unit,
                 ),
+                ..returning
             })
         } else {
             Some(returning)
@@ -810,8 +824,24 @@ impl FollowScroll {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn return_deadline(&self) -> Option<f64> {
         self.amll_return.map(|curve| curve.end_ms)
+    }
+
+    pub(crate) fn return_cue_deadline(&self) -> Option<f64> {
+        self.amll_return.map(|curve| curve.cue_deadline_ms)
+    }
+
+    /// Only the interval beyond a normal step is deferred. The last committed
+    /// sample and this candidate use the same clock, including at steady load.
+    pub(crate) fn return_delay(&self, now_ms: f64, max_step_ms: f64) -> f64 {
+        if self.returning() {
+            self.last_ms
+                .map_or(0.0, |last_ms| (now_ms - last_ms - max_step_ms).max(0.0))
+        } else {
+            0.0
+        }
     }
 
     pub(crate) fn return_deadline_playback(&self) -> Option<f64> {
@@ -890,6 +920,10 @@ impl FollowScroll {
         if let Some(frame) = self.preview_return(command.offset, now_ms) {
             return self.commit_return(frame, now_ms);
         }
+        self.sample_ordinary_follow(command, now_ms)
+    }
+
+    pub(crate) fn sample_ordinary_follow(&mut self, command: &Command, now_ms: f64) -> f64 {
         let was_frozen = self.frozen;
         if was_frozen {
             // Momentum/rebound may have moved since freeze() captured the target.

@@ -4,7 +4,7 @@ use crate::{
     Line,
     gpu::SurfaceRenderer,
     live::{Timeline, TrackPacket, frame_clock},
-    motion::{FollowScroll, ReturnFrame},
+    motion::{AMLL_RETURN_MAX_STEP_MS, FollowScroll, ReturnFrame},
     scene::{ReturnTarget, ReturnTiming, TrackScene},
 };
 use std::{
@@ -968,7 +968,7 @@ pub(crate) fn preview_return(
     layout: &TrackScene,
     scroll: &FollowScroll,
     destination: ReturnTarget,
-    native_ms: f64,
+    motion_ms: f64,
 ) -> Option<ReturnFrame> {
     let target = layout.resolve_return_target(destination);
     let (coordinate, _) = layout.return_coordinate(target);
@@ -978,7 +978,7 @@ pub(crate) fn preview_return(
         position,
         target - scroll.position(),
         height,
-        native_ms,
+        motion_ms,
     )?;
     frame.position = layout.return_offset(frame.position);
     Some(frame)
@@ -989,12 +989,12 @@ fn prepare_return_frame(
     scroll: &mut FollowScroll,
     timing: ReturnTiming,
     destination: ReturnTarget,
-    native_ms: f64,
+    motion_ms: f64,
 ) -> Result<(bool, Option<ReturnFrame>), String> {
     let displayed = scroll.position();
     let time = timing.target.time;
     let anchor = ReturnAnchor::capture(layout, scroll, time);
-    let preview = preview_return(layout, scroll, destination, native_ms);
+    let preview = preview_return(layout, scroll, destination, motion_ms);
     let playback = layout
         .prepare_return_playback(timing, displayed, preview.map_or(displayed, |p| p.position))
         .map_err(|e| e.to_string())?;
@@ -1014,7 +1014,7 @@ fn prepare_return_frame(
     anchor.apply(layout, scroll, time);
 
     for _ in 0..2 {
-        let Some(next) = preview_return(layout, scroll, destination, native_ms) else {
+        let Some(next) = preview_return(layout, scroll, destination, motion_ms) else {
             return Ok((true, None));
         };
         if layout.return_viewport_ready(timing, next.position) {
@@ -1031,7 +1031,7 @@ fn prepare_return_frame(
             .map_err(|e| e.to_string())?;
         anchor.apply(layout, scroll, time);
     }
-    let next = preview_return(layout, scroll, destination, native_ms);
+    let next = preview_return(layout, scroll, destination, motion_ms);
     let covered = next.is_none_or(|frame| layout.return_viewport_ready(timing, frame.position));
     Ok((covered, next))
 }
@@ -1043,6 +1043,7 @@ fn prepare_drawable<T>(
     layout: &mut TrackScene,
     timeline: &Timeline,
     mut scroll: Option<(&mut FollowScroll, bool)>,
+    max_return_step_ms: f64,
     mut clock: impl FnMut() -> f64,
     mut acquire: impl FnMut() -> Result<Option<T>, String>,
 ) -> Result<Option<PreparedDrawable<T>>, String> {
@@ -1059,10 +1060,11 @@ fn prepare_drawable<T>(
         };
         let (covered, return_frame) = match (&mut scroll, timing) {
             (Some((scroll, true)), Some(timing)) => {
-                // Once the deadline has passed, a newly observed cue or clock
-                // correction belongs to ordinary follow. Resolve the return's
-                // last projected destination against the current geometry.
-                let arrival = scroll.return_deadline().map(|deadline| {
+                let delay_ms = scroll.return_delay(prepared_ms, max_return_step_ms);
+                // Only the motion deadline moves after a stall. Playback
+                // corrections before the original cue deadline still apply.
+                // Once it passes, new cues belong to ordinary follow.
+                let arrival = scroll.return_cue_deadline().map(|deadline| {
                     if prepared_ms < deadline {
                         timeline.position(deadline)
                     } else {
@@ -1074,10 +1076,18 @@ fn prepare_drawable<T>(
                 let destination = arrival
                     .filter(|arrive| *arrive != position)
                     .map_or(timing.target, |arrive| layout.return_target_at(arrive));
-                let (covered, mut frame) =
-                    prepare_return_frame(layout, scroll, timing, destination, prepared_ms)?;
+                let (covered, mut frame) = prepare_return_frame(
+                    layout,
+                    scroll,
+                    timing,
+                    destination,
+                    prepared_ms - delay_ms,
+                )?;
                 if let Some(frame) = &mut frame {
-                    frame.project_deadline(|deadline| timeline.position(deadline));
+                    frame.delay_by(delay_ms);
+                    frame.project_deadline(|deadline| {
+                        arrival.unwrap_or_else(|| timeline.position(deadline))
+                    });
                 }
                 (covered, frame)
             }
@@ -1170,6 +1180,7 @@ pub(crate) fn manual_frame_for_test(
         layout,
         &timeline,
         Some((&mut *scroll, false)),
+        f64::INFINITY,
         || native_ms,
         || Ok(Some(())),
     )
@@ -1204,8 +1215,17 @@ pub(crate) fn return_frame_with_timeline_for_test(
     clock: impl FnMut() -> f64,
     acquire: impl FnMut() -> Result<Option<()>, String>,
 ) -> Option<(f64, f64, f64)> {
-    let prepared =
-        prepare_drawable(layout, timeline, Some((&mut *scroll, true)), clock, acquire).unwrap()?;
+    // Geometry tests sample specific points on the curve, independently of
+    // live submission cadence.
+    let prepared = prepare_drawable(
+        layout,
+        timeline,
+        Some((&mut *scroll, true)),
+        f64::INFINITY,
+        clock,
+        acquire,
+    )
+    .unwrap()?;
     let offset = apply_prepared_scroll(
         layout,
         scroll,
@@ -1235,10 +1255,14 @@ fn apply_prepared_scroll(
         // first movement for the next display sample.
     }
     let command = layout.scroll_command(position, scroll.position());
-    scroll.sample(&command, native_ms, following)
+    if following {
+        scroll.sample_ordinary_follow(&command, native_ms)
+    } else {
+        scroll.sample(&command, native_ms, false)
+    }
 }
 
-/// The complete CPU composition path shared by the native owner and host tests.
+#[cfg(test)]
 pub(crate) fn compose_live_frame(
     layout: &TrackScene,
     scroll: &FollowScroll,
@@ -1248,9 +1272,31 @@ pub(crate) fn compose_live_frame(
     native_ms: f64,
     (playing, rate): (bool, f64),
 ) -> ((f32, f32), crate::scheduling::FrameSchedule) {
+    compose_live_pose(
+        layout,
+        (
+            scroll.position(),
+            scroll.row_adjustments(),
+            scroll.animating(),
+        ),
+        appearance,
+        (scene, overlay),
+        time,
+        native_ms,
+        (playing, rate),
+    )
+}
+
+fn compose_live_pose(
+    layout: &TrackScene,
+    (offset, adjust, scroll_animating): (f64, &[f64], bool),
+    appearance: &mut crate::appearance::AppearanceState,
+    (scene, overlay): (&mut vello::Scene, &mut vello::Scene),
+    time: f64,
+    native_ms: f64,
+    (playing, rate): (bool, f64),
+) -> ((f32, f32), crate::scheduling::FrameSchedule) {
     let effect = crate::appearance::LIVE_EFFECT;
-    let offset = scroll.position();
-    let adjust = scroll.row_adjustments();
     appearance.prepare(layout, time, native_ms);
     appearance.advance(layout, time, native_ms, playing, effect);
     let band = layout.frame_appearance(time, offset, adjust, appearance, scene, effect);
@@ -1260,10 +1306,87 @@ pub(crate) fn compose_live_frame(
         offset,
         adjust,
         appearance,
-        scroll.animating(),
+        scroll_animating,
         playing && rate > 0.0,
     );
     (band, schedule)
+}
+
+impl Engine {
+    fn submit_prepared_frame<T, R>(
+        &mut self,
+        prepared: PreparedDrawable<T>,
+        resume_step_ms: f64,
+        submit: impl FnOnce(&mut Self, T, (f32, f32), f32) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let started = Instant::now();
+        let native_ms = prepared.native_ms;
+        let position = self.timeline.position(native_ms);
+        let layout = self.layout.as_ref().expect("prepared frame has a layout");
+        if resume_step_ms > 0.0 {
+            self.appearance.resume(native_ms, resume_step_ms);
+        }
+        let pose = if let Some(frame) = prepared.return_frame {
+            // Paint the candidate without consuming it. The terminal pose has
+            // zero cascade displacement and may wake ordinary follow.
+            let animating = frame.continuing()
+                || (layout.scroll_target(position) - frame.position).abs()
+                    >= crate::motion::AMLL_SETTLE_POSITION;
+            (frame.position, &[][..], animating)
+        } else {
+            if resume_step_ms > 0.0 {
+                self.scroll.resume(native_ms, resume_step_ms);
+            }
+            apply_prepared_scroll(
+                layout,
+                &mut self.scroll,
+                None,
+                position,
+                native_ms,
+                self.following,
+            );
+            (
+                self.scroll.position(),
+                self.scroll.row_adjustments(),
+                self.scroll.animating(),
+            )
+        };
+        let blur_animating = self.blur.advance(native_ms);
+        let (band, schedule) = compose_live_pose(
+            layout,
+            pose,
+            &mut self.appearance,
+            (&mut self.scene, &mut self.overlay),
+            position,
+            native_ms,
+            (self.timeline.playing, self.timeline.rate),
+        );
+        self.metrics.cpu_scene_ms =
+            prepared.preparation_ms + started.elapsed().as_secs_f64() * 1000.0;
+        let blur = self.blur.value;
+        let result = submit(self, prepared.drawable, band, blur)?;
+        if let Some(frame) = prepared.return_frame {
+            apply_prepared_scroll(
+                self.layout.as_ref().expect("submitted frame has a layout"),
+                &mut self.scroll,
+                Some(frame),
+                position,
+                native_ms,
+                self.following,
+            );
+        }
+        self.metrics.target_native_ms = native_ms;
+        self.metrics.animating = u32::from(schedule.continuous || blur_animating);
+        self.metrics.visible_changes = u32::from(schedule.visible_changes);
+        self.metrics.next_cue_native_ms = crate::scheduling::native_cue(
+            position,
+            native_ms,
+            self.timeline.rate,
+            schedule.next_cue,
+        );
+        self.metrics.position_ms = position;
+        Ok(result)
+    }
 }
 
 /// A missing layout after an anchor is transient readiness, not missing input.
@@ -1329,6 +1452,7 @@ pub extern "C" fn kr_render(
             layout,
             &engine.timeline,
             Some((&mut engine.scroll, engine.following)),
+            AMLL_RETURN_MAX_STEP_MS,
             || {
                 frame_clock(
                     native_ms,
@@ -1341,58 +1465,23 @@ pub extern "C" fn kr_render(
         else {
             return Ok(2);
         };
-        let frame = prepared.drawable;
-        let native_ms = prepared.native_ms;
-        engine.metrics.target_native_ms = native_ms;
-        let position = engine.timeline.position(native_ms);
-        let started = Instant::now();
-        if resume_step_ms > 0.0 {
-            engine.appearance.resume(native_ms, resume_step_ms);
-            engine.scroll.resume(native_ms, resume_step_ms);
-        }
-        // Geometry changes reach the tween through `command.offset`; remapping
-        // here would clear the spring history every frame.
-        apply_prepared_scroll(
-            layout,
-            &mut engine.scroll,
-            prepared.return_frame,
-            position,
-            native_ms,
-            engine.following,
-        );
-        let blur_animating = engine.blur.advance(native_ms);
-        let blur = engine.blur.value;
-        let (band, schedule) = compose_live_frame(
-            layout,
-            &engine.scroll,
-            &mut engine.appearance,
-            (&mut engine.scene, &mut engine.overlay),
-            position,
-            native_ms,
-            (engine.timeline.playing, engine.timeline.rate),
-        );
-        engine.metrics.animating = u32::from(schedule.continuous || blur_animating);
-        engine.metrics.visible_changes = u32::from(schedule.visible_changes);
-        engine.metrics.next_cue_native_ms = crate::scheduling::native_cue(
-            position,
-            native_ms,
-            engine.timeline.rate,
-            schedule.next_cue,
-        );
-        engine.metrics.position_ms = position;
-        engine.metrics.cpu_scene_ms =
-            prepared.preparation_ms + started.elapsed().as_secs_f64() * 1000.0;
-        let (stats, present) = engine
-            .surface
-            .render_overlay_scaled(
-                &engine.scene,
-                &engine.overlay,
-                band,
-                frame,
-                crate::appearance::LIVE_EFFECT.glow(),
-                blur,
-            )
-            .map_err(|e| e.to_string())?;
+        let (stats, present) = engine.submit_prepared_frame(
+            prepared,
+            resume_step_ms,
+            |engine, frame, band, blur| {
+                engine
+                    .surface
+                    .render_overlay_scaled(
+                        &engine.scene,
+                        &engine.overlay,
+                        band,
+                        frame,
+                        crate::appearance::LIVE_EFFECT.glow(),
+                        blur,
+                    )
+                    .map_err(|e| e.to_string())
+            },
+        )?;
         engine.metrics.frames += 1;
         engine.metrics.cpu_encode_ms = stats.cpu_encode_ms;
         engine.metrics.gpu_interval_ms = stats.gpu_interval_ms.unwrap_or(-1.0);
@@ -1527,6 +1616,576 @@ mod tests {
         assert_eq!(sampled, 0);
     }
 
+    struct FarAmllReturn(u64);
+
+    impl Drop for FarAmllReturn {
+        fn drop(&mut self) {
+            kr_destroy(self.0);
+        }
+    }
+
+    #[derive(Debug)]
+    struct ReturnPose {
+        offset: f64,
+        row_coordinate: f64,
+        anchor_y: f64,
+        target_offset: f64,
+        target_coordinate: f64,
+        playback_ms: f64,
+        returning: bool,
+        animating: bool,
+    }
+
+    impl FarAmllReturn {
+        const VIEWPORT: u32 = 640;
+
+        fn new(manual_row: usize, active_row: usize) -> Self {
+            Self::with_cues(manual_row, active_row, |row| {
+                let start = f64::from(row) * 1000.0;
+                (start, start + 1000.0)
+            })
+        }
+
+        fn with_cues(
+            manual_row: usize,
+            active_row: usize,
+            cue: impl Fn(i32) -> (f64, f64),
+        ) -> Self {
+            use crate::typography::{
+                Fonts, PaintVoice, PaintWord, Settings, Style, WordAppearance,
+            };
+
+            static NEXT_HANDLE: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(u64::MAX - 2);
+
+            let lines: Vec<_> = (0..224)
+                .map(|row| {
+                    let text = String::from("La");
+                    let (start, end) = cue(row);
+                    Line {
+                        text: text.clone(),
+                        start,
+                        end,
+                        background_end: end,
+                        atoms: vec![crate::Atom {
+                            bytes: 0..text.len(),
+                            start,
+                            end,
+                        }],
+                        paint: Some(PaintVoice {
+                            translation: None,
+                            start,
+                            end,
+                            text: text.clone(),
+                            words: vec![PaintWord {
+                                appearance: Some(WordAppearance {
+                                    emphasized: false,
+                                    origin: 0.5,
+                                    rtl: false,
+                                    last: true,
+                                    emphasis: None,
+                                }),
+                                text,
+                                offset: 0,
+                                start,
+                                end,
+                                joined: false,
+                                gap_after: false,
+                                group: None,
+                                graphemes: vec![String::from("L"), String::from("a")],
+                            }],
+                            cjk_breaks: vec![],
+                            opposite: false,
+                            duet: false,
+                        }),
+                        backgrounds: vec![],
+                    }
+                })
+                .collect();
+            let width = 390;
+            let height = Self::VIEWPORT;
+            let scale = 1.0;
+            let time = lines[active_row].start + 500.0;
+            let settings = Settings {
+                style: Style::Amll,
+                font_scale: 1.0,
+                landscape: false,
+            };
+            let mut fonts = Fonts::default();
+            fonts
+                .register(
+                    include_bytes!("../../../ExpoLyrics/assets/fonts/SF-Pro-Display-Regular.otf"),
+                    include_bytes!("../../../ExpoLyrics/assets/fonts/SF-Pro-Display-Bold.otf"),
+                )
+                .unwrap();
+            let layout =
+                TrackScene::with_fonts(lines, width, height, scale, Some(&settings), &mut fonts)
+                    .unwrap();
+            let mut scroll = FollowScroll::default();
+            scroll.configure(Style::Amll, f64::from(scale), layout.lines().len());
+            let mut timeline = Timeline::default();
+            assert!(timeline.replace(1));
+            let engine = Engine {
+                timeline,
+                lines: layout.lines().to_vec(),
+                fonts,
+                settings: Some(settings),
+                credits: None,
+                empty: None,
+                empty_scene: None,
+                overlay: vello::Scene::new(),
+                layout: Some(layout),
+                layout_key: String::new(),
+                track_id: "far-amll-return".into(),
+                layout_cache: crate::scene::LayoutCache::default(),
+                surface: TestSurface(None),
+                scene: vello::Scene::new(),
+                scale,
+                metrics: Metrics {
+                    width,
+                    height,
+                    generation: 1,
+                    ..Metrics::default()
+                },
+                scroll,
+                appearance: crate::appearance::AppearanceState::default(),
+                following: true,
+                blur: BlurRamp::default(),
+            };
+            let handle = NEXT_HANDLE.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            assert!(engines().lock().unwrap().insert(handle, engine).is_none());
+            let fixture = Self(handle);
+
+            assert_eq!(
+                kr_set_anchor(handle, 1, 1, time, 0.0, 0.0, false, 1.0, true),
+                0
+            );
+            let initial = fixture.frame(0.0, 0.0, true, manual_row).unwrap();
+            let mut delta = 0.0;
+            assert_eq!(
+                with(handle, |engine| {
+                    let layout = engine.layout.as_ref().unwrap();
+                    delta = layout.row_top(manual_row) - initial.offset;
+                    if delta.abs() >= 8.0 * f64::from(height) {
+                        assert!(!layout.geometry_ready((manual_row + active_row) / 2));
+                    }
+                    Ok(0)
+                }),
+                0
+            );
+            assert_eq!(kr_set_following(handle, false), 0);
+            assert_eq!(kr_scroll_by(handle, delta), 0);
+            assert_eq!(kr_fling(handle, 0.0, 20.0), 0);
+            fixture
+        }
+
+        fn frame(
+            &self,
+            native_ms: f64,
+            acquire_ms: f64,
+            drawable_available: bool,
+            anchor_row: usize,
+        ) -> Option<ReturnPose> {
+            self.attempt_frame(native_ms, acquire_ms, drawable_available, anchor_row, false)
+        }
+
+        fn attempt_frame(
+            &self,
+            native_ms: f64,
+            acquire_ms: f64,
+            drawable_available: bool,
+            anchor_row: usize,
+            fail_submission: bool,
+        ) -> Option<ReturnPose> {
+            let mut pose = None;
+            let mut acquired = false;
+            let status = with(self.0, |engine| {
+                let layout = engine.layout.as_mut().unwrap();
+                // Substitute the host clock and drawable at the same boundary
+                // as kr_render. Ownership comes from the actual ABI commands.
+                let clock = std::cell::Cell::new(native_ms);
+                let Some(prepared) = prepare_drawable(
+                    layout,
+                    &engine.timeline,
+                    Some((&mut engine.scroll, engine.following)),
+                    AMLL_RETURN_MAX_STEP_MS,
+                    || clock.get(),
+                    || {
+                        acquired = true;
+                        clock.set(native_ms + acquire_ms);
+                        Ok(drawable_available.then_some(()))
+                    },
+                )?
+                else {
+                    return Ok(2);
+                };
+                let before_submission = (engine.scroll.position(), engine.scroll.return_deadline());
+                let submitted = engine.submit_prepared_frame(prepared, 0.0, |_, (), _, _| {
+                    if fail_submission {
+                        Err("test submission failed".into())
+                    } else {
+                        Ok(())
+                    }
+                });
+                if fail_submission {
+                    assert_eq!(
+                        (engine.scroll.position(), engine.scroll.return_deadline()),
+                        before_submission
+                    );
+                    // Use a distinct status so an assertion panic cannot be
+                    // mistaken for the injected render error.
+                    assert_eq!(submitted.unwrap_err(), "test submission failed");
+                    return Ok(3);
+                }
+                submitted?;
+                let layout = engine.layout.as_ref().unwrap();
+                let time = engine.metrics.position_ms;
+                let offset = engine.scroll.position();
+                let target_offset = layout.scroll_target(time);
+                pose = Some(ReturnPose {
+                    offset,
+                    row_coordinate: layout.return_coordinate(offset).0,
+                    anchor_y: layout.painted_row_top(time, anchor_row) - offset,
+                    target_offset,
+                    target_coordinate: layout.return_coordinate(target_offset).0,
+                    playback_ms: time,
+                    returning: engine.scroll.returning(),
+                    animating: engine.scroll.animating(),
+                });
+                Ok(0)
+            });
+            assert!(
+                acquired,
+                "frame did not reach drawable acquisition at {native_ms} ms"
+            );
+            let expected = if !drawable_available {
+                2
+            } else if fail_submission {
+                3
+            } else {
+                0
+            };
+            assert_eq!(status, expected);
+            pose
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum ReturnInterruption {
+        FailedFirstDrawable,
+        SlowFirstAcquisition,
+        SkippedFramesAfterStart,
+        SteadyAcquisition,
+    }
+
+    fn assert_far_amll_command_trajectory(interruption: ReturnInterruption) {
+        for hz in [60, 120] {
+            for (manual_row, active_row) in [(32, 192), (192, 32)] {
+                let case = format!("{interruption:?} at {hz} Hz, {manual_row}->{active_row}");
+                let fixture = FarAmllReturn::new(manual_row, active_row);
+                let step_ms = 1000.0 / f64::from(hz);
+                let steady_acquire_ms =
+                    if matches!(interruption, ReturnInterruption::SteadyAcquisition) {
+                        480.0 / f64::from(hz)
+                    } else {
+                        0.0
+                    };
+                let manual = fixture.frame(40.0, 0.0, true, manual_row).unwrap();
+                assert!(
+                    (manual.offset - manual.target_offset).abs()
+                        >= 8.0 * f64::from(FarAmllReturn::VIEWPORT)
+                );
+                assert!((manual.row_coordinate - manual.target_coordinate).abs() > 100.0);
+                assert_eq!(kr_set_following(fixture.0, true), 0);
+
+                let (start_ms, acquire_ms, gap_ms) = match interruption {
+                    ReturnInterruption::FailedFirstDrawable => {
+                        assert!(fixture.frame(100.0, 30.0, false, manual_row).is_none());
+                        (500.0, 0.0, 0.0)
+                    }
+                    ReturnInterruption::SlowFirstAcquisition => (100.0, 450.0, 0.0),
+                    ReturnInterruption::SkippedFramesAfterStart => (100.0, 0.0, 450.0),
+                    ReturnInterruption::SteadyAcquisition => (100.0, 0.0, 0.0),
+                };
+                let first = fixture
+                    .frame(start_ms, acquire_ms + steady_acquire_ms, true, manual_row)
+                    .unwrap();
+                assert!(first.animating, "return did not schedule motion: {case}");
+                assert!(
+                    (first.row_coordinate - manual.row_coordinate).abs() < 1e-6
+                        && (first.anchor_y - manual.anchor_y).abs() < 1e-6,
+                    "first submitted frame moved from the manual pose: {case}"
+                );
+                if gap_ms > 0.0 {
+                    assert!(
+                        fixture
+                            .frame(start_ms + step_ms, 0.0, false, manual_row)
+                            .is_none()
+                    );
+                }
+
+                let distance = first.target_coordinate - first.row_coordinate;
+                let direction = distance.signum();
+                // Allow headroom above the peak of the uninterrupted 700 ms
+                // curve, while forbidding a multi-frame jump after a stall.
+                let max_step = 2.0 * distance.abs() * step_ms / 700.0;
+                let mut previous = first.row_coordinate;
+                let mut travel = 0.0;
+                let mut crossed_middle = false;
+                let mut settled = false;
+                let mut now = start_ms + acquire_ms + gap_ms;
+                let mut landed_ms = 0.0;
+                let frames = if steady_acquire_ms > 0.0 { 2 * hz } else { hz };
+                for frame in 1..=frames {
+                    now += step_ms;
+                    let mut limit = max_step;
+                    if matches!(interruption, ReturnInterruption::SkippedFramesAfterStart)
+                        && matches!(frame, 16 | 26)
+                    {
+                        if frame == 16 {
+                            assert!(
+                                fixture
+                                    .attempt_frame(now, 100.0, true, manual_row, true)
+                                    .is_none()
+                            );
+                        }
+                        now += 350.0;
+                        // Recovery can use one 60 Hz step even on a 120 Hz display.
+                        limit *= f64::from(hz) / 60.0;
+                    }
+                    let pose = fixture
+                        .frame(now, steady_acquire_ms, true, manual_row)
+                        .unwrap();
+                    let advance = direction * (pose.row_coordinate - previous);
+                    assert!(
+                        (-1e-6..=limit).contains(&advance),
+                        "submitted frame {frame} skipped {advance:.2} rows (limit {limit:.2}): {case}"
+                    );
+                    travel += advance;
+                    crossed_middle |= (0.4..=0.6).contains(&(travel / distance.abs()));
+                    previous = pose.row_coordinate;
+                    if !pose.animating {
+                        assert!((previous - pose.target_coordinate).abs() < 1e-6, "{case}");
+                        settled = true;
+                        landed_ms = now;
+                        break;
+                    }
+                }
+                assert!(
+                    settled && crossed_middle,
+                    "return skipped the middle or failed to settle: {case}"
+                );
+                assert!(
+                    (travel - distance.abs()).abs() < 1e-6,
+                    "incomplete travel: {case}"
+                );
+                if matches!(
+                    interruption,
+                    ReturnInterruption::FailedFirstDrawable | ReturnInterruption::SteadyAcquisition
+                ) {
+                    assert!(
+                        ((700.0 - 1e-6)..=(700.0 + step_ms + 1e-6))
+                            .contains(&(landed_ms - start_ms)),
+                        "uninterrupted travel finished at {} ms: {case}",
+                        landed_ms - start_ms
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn far_amll_follow_command_keeps_original_pose_after_failed_first_drawable() {
+        assert_far_amll_command_trajectory(ReturnInterruption::FailedFirstDrawable);
+    }
+
+    #[test]
+    fn far_amll_follow_command_does_not_spend_travel_during_first_acquisition() {
+        assert_far_amll_command_trajectory(ReturnInterruption::SlowFirstAcquisition);
+    }
+
+    #[test]
+    fn far_amll_follow_command_does_not_skip_travel_after_missed_frames() {
+        assert_far_amll_command_trajectory(ReturnInterruption::SkippedFramesAfterStart);
+    }
+
+    #[test]
+    fn far_amll_follow_command_keeps_duration_with_steady_acquisition() {
+        assert_far_amll_command_trajectory(ReturnInterruption::SteadyAcquisition);
+    }
+
+    #[test]
+    fn far_amll_follow_command_follows_a_playing_cue_across_a_stall() {
+        let manual_row = 32;
+        let fixture = FarAmllReturn::new(manual_row, 192);
+        let manual = fixture.frame(40.0, 0.0, true, manual_row).unwrap();
+        assert_eq!(
+            kr_set_anchor(fixture.0, 1, 2, 192_500.0, 100.0, 100.0, true, 1.0, false),
+            0
+        );
+        assert_eq!(kr_set_following(fixture.0, true), 0);
+        let first = fixture.frame(100.0, 0.0, true, manual_row).unwrap();
+        assert_eq!(first.playback_ms, 192_500.0);
+        assert!((first.anchor_y - manual.anchor_y).abs() < 1e-6);
+
+        let resumed = fixture.frame(750.0, 0.0, true, manual_row).unwrap();
+        assert_eq!(resumed.playback_ms, 193_150.0);
+        assert!(resumed.target_coordinate > first.target_coordinate);
+        let max_step =
+            2.0 * (resumed.target_coordinate - first.row_coordinate) * AMLL_RETURN_MAX_STEP_MS
+                / 700.0;
+        assert!((0.0..=max_step).contains(&(resumed.row_coordinate - first.row_coordinate)));
+
+        let mut previous = resumed.row_coordinate;
+        for frame in 1..=43 {
+            let now = 750.0 + f64::from(frame) * AMLL_RETURN_MAX_STEP_MS;
+            let pose = fixture.frame(now, 0.0, true, manual_row).unwrap();
+            assert!((-1e-6..=max_step).contains(&(pose.row_coordinate - previous)));
+            previous = pose.row_coordinate;
+            if !pose.animating {
+                assert_eq!(pose.target_coordinate, resumed.target_coordinate);
+                assert!((pose.row_coordinate - pose.target_coordinate).abs() < 1e-6);
+                return;
+            }
+        }
+        panic!("return did not land on the cue reached during the stall");
+    }
+
+    #[test]
+    fn far_amll_follow_command_bounds_late_retarget_across_dense_playing_cues() {
+        let manual_row = 32;
+        let active_row = 192;
+        let fixture = FarAmllReturn::with_cues(manual_row, active_row, |row| match row {
+            0..=191 => (f64::from(row) * 1000.0, f64::from(row + 1) * 1000.0),
+            192 => (192_000.0, 192_800.0),
+            193..=202 => {
+                let start = 192_800.0 + f64::from(row - 193) * 40.0;
+                (start, start + 40.0)
+            }
+            _ => {
+                let start = 193_200.0 + f64::from(row - 203) * 1000.0;
+                (start, start + 1000.0)
+            }
+        });
+        let manual = fixture.frame(40.0, 0.0, true, manual_row).unwrap();
+        assert_eq!(
+            kr_set_anchor(fixture.0, 1, 2, 192_050.0, 100.0, 100.0, true, 1.0, false),
+            0
+        );
+        assert_eq!(kr_set_following(fixture.0, true), 0);
+        let first = fixture.frame(100.0, 0.0, true, manual_row).unwrap();
+        assert!((first.anchor_y - manual.anchor_y).abs() < 1e-6);
+        for frame in 1..=40 {
+            let now = 100.0 + f64::from(frame) * AMLL_RETURN_MAX_STEP_MS;
+            fixture.frame(now, 0.0, true, active_row).unwrap();
+        }
+        // The original return has 25 ms left. Playback crosses about ten cues
+        // during the stall, and recovery can advance the curve by one step.
+        let before = fixture.frame(775.0, 0.0, true, active_row).unwrap();
+        assert!(before.animating);
+        let max_travel =
+            2.0 * (before.target_offset - first.offset).abs() * AMLL_RETURN_MAX_STEP_MS / 700.0;
+        let resumed = fixture.frame(1225.0, 0.0, true, active_row).unwrap();
+        assert_eq!(resumed.playback_ms, 193_175.0);
+        assert!(resumed.target_coordinate - before.target_coordinate >= 9.0);
+        assert!((-1e-6..=max_travel).contains(&(before.anchor_y - resumed.anchor_y)));
+        assert!(resumed.returning);
+
+        let resumed_target = resumed.target_coordinate;
+        let mut pose = resumed;
+        let mut landed_at_original_cue = false;
+        let mut paused_playback_ms = None;
+        // The ordinary spring must settle its velocity and its delayed rows.
+        // Allow up to 2.5 s of 60 Hz samples after the stall for that handoff.
+        for frame in 1..=150 {
+            let now = 1225.0 + f64::from(frame) * AMLL_RETURN_MAX_STEP_MS;
+            let previous = pose.anchor_y;
+            pose = fixture.frame(now, 0.0, true, active_row).unwrap();
+            let travel = previous - pose.anchor_y;
+            assert!(
+                (-1e-6..=max_travel).contains(&travel),
+                "frame {frame} after the stall traveled {travel:.1} px (limit {max_travel:.1})"
+            );
+            if !pose.returning && !landed_at_original_cue {
+                assert!((pose.row_coordinate - before.target_coordinate).abs() < 1e-6);
+                landed_at_original_cue = true;
+            }
+            if let Some(playback_ms) = paused_playback_ms {
+                assert_eq!(pose.playback_ms, playback_ms);
+            } else if pose.playback_ms >= 193_200.0 {
+                assert!(pose.target_coordinate > resumed_target);
+                assert_eq!(
+                    kr_set_anchor(
+                        fixture.0,
+                        1,
+                        3,
+                        pose.playback_ms,
+                        now,
+                        now,
+                        false,
+                        1.0,
+                        false
+                    ),
+                    0
+                );
+                paused_playback_ms = Some(pose.playback_ms);
+            }
+            if !pose.animating {
+                assert!(landed_at_original_cue);
+                assert!(paused_playback_ms.is_some());
+                assert!(pose.target_coordinate > resumed_target);
+                assert!((pose.offset - pose.target_offset).abs() < 1e-6);
+                return;
+            }
+        }
+        panic!(
+            "return did not settle after 2.5 s: {pose:?}, paused at {paused_playback_ms:?}, \
+             landed at original cue: {landed_at_original_cue}"
+        );
+    }
+
+    #[test]
+    fn far_amll_follow_command_cancels_return_on_manual_takeover() {
+        let manual_row = 32;
+        let fixture = FarAmllReturn::new(manual_row, 192);
+        let manual = fixture.frame(40.0, 0.0, true, manual_row).unwrap();
+        assert_eq!(kr_set_following(fixture.0, true), 0);
+        fixture.frame(100.0, 0.0, true, manual_row).unwrap();
+        let moving = fixture.frame(116.0, 0.0, true, manual_row).unwrap();
+        assert!(moving.row_coordinate > manual.row_coordinate);
+
+        assert_eq!(kr_set_following(fixture.0, false), 0);
+        let held = fixture.frame(600.0, 0.0, true, manual_row).unwrap();
+        assert!((held.anchor_y - moving.anchor_y).abs() < 1e-6);
+        assert!(!held.animating);
+        assert_eq!(kr_scroll_by(fixture.0, -40.0), 0);
+        assert_eq!(kr_fling(fixture.0, 0.0, 610.0), 0);
+        let dragged = fixture.frame(616.0, 0.0, true, manual_row).unwrap();
+        assert!((dragged.anchor_y - held.anchor_y - 40.0).abs() < 1e-6);
+
+        assert_eq!(kr_set_following(fixture.0, true), 0);
+        let restarted = fixture.frame(1200.0, 0.0, true, manual_row).unwrap();
+        assert!((restarted.anchor_y - dragged.anchor_y).abs() < 1e-6);
+        assert!(restarted.animating);
+    }
+
+    #[test]
+    fn near_amll_follow_command_keeps_the_ordinary_spring() {
+        let manual_row = 35;
+        let fixture = FarAmllReturn::new(manual_row, 32);
+        let manual = fixture.frame(40.0, 0.0, true, manual_row).unwrap();
+        assert!((manual.offset - manual.target_offset).abs() < f64::from(FarAmllReturn::VIEWPORT));
+        assert_eq!(kr_set_following(fixture.0, true), 0);
+        let first = fixture.frame(100.0, 450.0, true, manual_row).unwrap();
+        assert!((first.anchor_y - manual.anchor_y).abs() < 1e-6);
+        let next = fixture.frame(566.0, 0.0, true, manual_row).unwrap();
+        let step = 0.016;
+        let omega = crate::motion::amll_omega(1000.0, false);
+        let expected = first.target_offset
+            + (first.offset - first.target_offset) * (1.0 + omega * step) * (-omega * step).exp();
+        assert!((next.offset - expected).abs() < 1e-6);
+    }
+
     #[test]
     fn abi_v11_metrics_layout_matches_header() {
         assert_eq!(kr_abi_version(), 11);
@@ -1588,6 +2247,7 @@ mod tests {
             &mut layout,
             &timeline,
             None,
+            f64::INFINITY,
             || times.next().unwrap(),
             || {
                 assert_eq!(
@@ -1630,6 +2290,7 @@ mod tests {
             &mut layout,
             &timeline,
             Some((&mut scroll, false)),
+            f64::INFINITY,
             || 100_000.0,
             || Ok(None),
         )
@@ -1641,6 +2302,7 @@ mod tests {
             &mut layout,
             &timeline,
             Some((&mut scroll, false)),
+            f64::INFINITY,
             || 200_000.0,
             || Ok(Some(())),
         )
