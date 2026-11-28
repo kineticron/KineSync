@@ -393,6 +393,8 @@ impl Gpu {
                     Features::empty()
                 },
                 required_limits,
+                #[cfg(target_os = "android")]
+                memory_hints: MemoryHints::MemoryUsage,
                 ..Default::default()
             })
             .await?;
