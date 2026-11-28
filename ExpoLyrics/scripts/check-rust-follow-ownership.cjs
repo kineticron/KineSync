@@ -161,8 +161,10 @@ assert.match(view, /setFollowing\(command\.value, command\.epoch, command\.gener
 assert.doesNotMatch(view, /setFollowing\(followTarget\)/, 'no render-captured follow command remains');
 assert.match(swift, /ownershipEpoch.*generation|"ownershipEpoch": self\.ownershipEpoch/s);
 assert.match(swift, /followCommandAllowed\(value, nextEpoch: nextEpoch, identity: UInt64\(commandGeneration\)\)/);
-assert.match(android, /followCommandAllowed\(value, nextEpoch\)/);
-assert.match(android, /"ownershipEpoch" to ownershipEpoch/);
-assert.match(android, /ownershipEpoch = 0; ownershipFloor = 0; touchActive = false/);
+assert.match(android, /fun setFollowing\([^\n]+\{\s*if \(!advanceOwnership\(epoch, commandGeneration\)\) return\s*clearGesture\(\)/);
+assert.match(android, /fun reserveTouchEpoch\([^\n]+\{\s*if \(!advanceOwnership\(epoch, commandGeneration\)\) return/);
+assert.match(android, /"ownershipEpoch" to releaseEpoch/);
+assert.match(android, /ownershipEpoch = 0\s*clearGesture\(\)/);
+assert.match(android, /private fun clearGesture\(\) \{\s*gestureEpoch = -1L\s*dragging = false\s*releasePending = false\s*\}/);
 
 console.log('Rust follow ownership PASS: delayed release events, delayed true commands, same-track touches and generation resets.');

@@ -1,7 +1,6 @@
 /* Execute the production Rust view and gesture against native follow guards.
- * This covers the delayed-false and late-JS-grant handoff on both renderer
- * styles. Native command application runs the Swift/Kotlin guard expressions
- * from source rather than a source-only assertion. */
+ * Exercise UIKit's delayed handoff and Android's ordered JS movement on both
+ * styles. Evaluate the Swift/Kotlin guard expressions directly from source. */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -24,17 +23,22 @@ function swiftGuards(name, endMarker) {
 const physicalAllowed = swiftGuards('followCommandAllowed', '  private func takeOwnership');
 const lateAllowed = swiftGuards('lateGestureOwnershipAllowed', '  private func followCommandAllowed');
 
-function kotlinGuards(name, endMarker) {
-  const start = android.indexOf(`private fun ${name}`);
-  const end = android.indexOf(endMarker, start);
-  assert.ok(start >= 0 && end > start, `Kotlin ${name} must exist`);
-  const conditions = [...android.slice(start, end).matchAll(/if \((.+?)\) return false/g)]
-    .map(match => `!(${match[1].replace(/\bownershipEpoch\b|\breleasePending\b|\btouchActive\b|\bownershipFloor\b/g, field => `state.${field}`)})`);
-  return new Function('state', 'value', 'gesture', 'nextEpoch',
-    `return !!(${conditions.map(condition => `(${condition})`).join(' && ')});`);
+function kotlinPredicate(pattern, fields) {
+  const expression = android.match(pattern)?.[1];
+  assert.ok(expression, String(pattern));
+  const evaluate = new Function(...fields, 'return (' + expression.replaceAll('.toDouble()', '')
+    .replace('epoch.isFinite()', 'Number.isFinite(epoch)') + ');');
+  return values => evaluate(...fields.map(field => values[field]));
 }
-const kotlinLate = kotlinGuards('lateGestureOwnershipAllowed', '  private fun emitRecapturedFollow');
-const kotlinPhysical = kotlinGuards('followCommandAllowed', '  private fun takeOwnership');
+const wrongCommandTrack = kotlinPredicate(
+  /fun advanceOwnership[^\n]*\n\s*if \((.+)\) return false/,
+  ['commandGeneration', 'generation', 'epoch']);
+const oldCommand = kotlinPredicate(/if \((nextEpoch <= ownershipEpoch)\) return false/,
+  ['nextEpoch', 'ownershipEpoch']);
+const ownsMovement = kotlinPredicate(/private fun ownsGesture[^\n]+=\s*([\s\S]+?)\n\n/,
+  ['attached', 'failed', 'gestureEpoch', 'epoch', 'commandGeneration', 'generation']);
+const currentRelease = kotlinPredicate(/if \((session == releaseSession[\s\S]+?)\) \{/,
+  ['session', 'releaseSession', 'generation', 'releaseGeneration', 'ownershipEpoch', 'releaseEpoch', 'releasePending', 'failed']);
 
 function nativeHarness(generation) {
   return {
@@ -63,14 +67,12 @@ function eventFor(native) {
   return { generation: native.generation, ownershipEpoch: native.ownershipEpoch };
 }
 function apply(native, command) {
-  const late = lateAllowed(native, command.value, command.gesture, command.epoch, command.generation)
-    && kotlinLate(native, command.value, command.gesture, command.epoch);
+  const late = lateAllowed(native, command.value, command.gesture, command.epoch, command.generation);
   if (late) {
     native.ownershipEpoch = command.epoch;
     return native.releaseRecaptured ? eventFor(native) : null;
   }
-  if (!physicalAllowed(native, command.value, command.gesture, command.epoch, command.generation)
-    || !kotlinPhysical(native, command.value, command.gesture, command.epoch)) return false;
+  if (!physicalAllowed(native, command.value, command.gesture, command.epoch, command.generation)) return false;
   native.ownershipEpoch = command.epoch;
   if (command.value) native.ownershipFloor = Math.max(native.ownershipFloor, command.epoch);
   native.releasePending = false;
@@ -107,6 +109,7 @@ let store;
 let parentFollow = true;
 let hooks = [];
 let hookIndex = 0;
+let layoutEffects = [];
 const react = {
   memo: fn => fn,
   useMemo(fn, deps) {
@@ -125,7 +128,16 @@ const react = {
     return [slot.value, next => { slot.value = typeof next === 'function' ? next(slot.value) : next; }];
   },
   useEffect: () => {},
-  useLayoutEffect: () => {},
+  useLayoutEffect(effect, deps) {
+    const index = hookIndex++;
+    const previous = hooks[index];
+    if (!previous || deps.some((dep, i) => !Object.is(dep, previous.deps[i]))) {
+      layoutEffects.push(() => {
+        previous?.cleanup?.();
+        hooks[index] = { deps, cleanup: effect() };
+      });
+    }
+  },
 };
 const imports = {
   react,
@@ -156,18 +168,25 @@ function nodes(node) {
 }
 function flush() { return Promise.resolve().then(() => Promise.resolve()).then(() => Promise.resolve()); }
 
-function createWiring(style = 'spicy') {
+function createWiring(style = 'spicy', platform = 'ios') {
+  imports['react-native'].Platform.OS = platform;
   store = {
     currentTrack: { id: 'track-a', durationMs: 240000 }, lyrics: [line], lyricsMetadata: {}, lyricsSource: '', lyricsStatusMessage: '',
     lyricsStyle: style, showTranslatedText: true, showRustDebugOverlay: false, anchorPositionMs: 0, anchorMonotonicMs: 0, isPlaying: false,
   };
   parentFollow = true;
   hooks = [];
+  let reveal = false;
+  const presses = [];
   const props = { active: true, tapToSeekEnabled: true, autoFollowEnabled: true,
+    shouldRevealTap: () => reveal, onLinePress: line => presses.push(line),
     onAutoFollowChange: enabled => { parentFollow = enabled; }, onUserInteraction: () => {}, resumeAutoFollowSignal: 0 };
   const render = () => {
     hookIndex = 0;
-    return nodes(RustLyricsView(props));
+    layoutEffects = [];
+    const rendered = nodes(RustLyricsView(props));
+    for (const applyEffect of layoutEffects) applyEffect();
+    return rendered;
   };
   const findPan = rendered => rendered.find(node => node.props?.onPanResponderGrant);
   const rendered = render();
@@ -179,18 +198,37 @@ function createWiring(style = 'spicy') {
   const native = nativeHarness(generation);
   const commands = [];
   const anchors = [];
+  const bridge = [];
   nativeView.props.ref.current = {
     setFollowing: (value, epoch, commandGeneration, gesture) => {
-      commands.push({ value, epoch, generation: commandGeneration, gesture });
+      const command = { value, epoch, generation: commandGeneration, gesture };
+      commands.push(command);
+      bridge.push({ name: 'follow', ...command });
       return Promise.resolve();
     },
-    hitTest: () => Promise.resolve(2),
+    reserveTouchEpoch: (value, epoch, generation) => {
+      bridge.push({ name: 'reserve', value, epoch, generation });
+      return Promise.resolve();
+    },
+    hitTest: () => Promise.resolve(0),
     setAnchor: json => { anchors.push(JSON.parse(json)); return Promise.resolve(); },
-    scrollBy: () => Promise.resolve(), fling: () => Promise.resolve(),
+    scrollBy: (delta, epoch, generation) => {
+      bridge.push({ name: 'scroll', delta, epoch, generation });
+      return Promise.resolve();
+    },
+    fling: (velocity, epoch, generation) => {
+      bridge.push({ name: 'fling', velocity, epoch, generation });
+      return Promise.resolve();
+    },
   };
   const status = event => nativeView.props.onStatus({ nativeEvent: event });
   return {
-    generation, native, commands, status, anchors,
+    generation, native, commands, status, anchors, bridge, presses,
+    setReveal: value => { reveal = value; },
+    deactivate: () => {
+      props.active = false;
+      assert.equal(findPan(render()), undefined, 'inactive surfaces lose the responder');
+    },
     readyReplacement: () => {
       const next = render().find(node => node.type === 'NativeView');
       const nextGeneration = JSON.parse(next.props.trackJson).generation;
@@ -198,8 +236,10 @@ function createWiring(style = 'spicy') {
       assert.equal(anchors.at(-1).generation, nextGeneration);
       return anchors.at(-1);
     },
-    grant: () => pan.props.onPanResponderGrant({ nativeEvent: { locationX: 20, locationY: 80 } }),
+    grant: () => pan.props.onPanResponderGrant({ nativeEvent: { locationX: 20, locationY: 80, pageY: 80 } }),
+    move: (dy, dx = 0) => pan.props.onPanResponderMove(null, { dy, dx }),
     release: () => pan.props.onPanResponderRelease(),
+    terminate: () => pan.props.onPanResponderTerminate(),
     ready: () => {
       status({ state: 'ready', generation: generation - 1, message: 'stale ready', ownershipEpoch: 0 });
       assert.equal(findPan(render()), undefined, 'a stale ready event cannot enable gestures');
@@ -208,6 +248,7 @@ function createWiring(style = 'spicy') {
       assert.equal(JSON.parse(ready.find(node => node.type === 'NativeView').props.trackJson).generation, generation);
       pan = findPan(ready);
       assert.ok(pan, 'the ready surface accepts gestures');
+      assert.equal(pan.props.onShouldBlockNativeResponder(), true);
     },
     follow: epoch => status({ state: 'follow', generation, ownershipEpoch: epoch, message: 'follow' }),
   };
@@ -372,9 +413,192 @@ for (const style of ['amll', 'spicy']) {
   assert.equal(wiring.readyReplacement().snap, true, 'a different track must still snap');
 }
 
+// UIKit remains the only movement path on iOS, including termination.
+{
+  const wiring = createWiring();
+  baseline(wiring);
+  wiring.grant(); wiring.move(-30); wiring.release();
+  wiring.grant(); wiring.move(40); wiring.terminate();
+  assert.deepEqual(wiring.bridge.map(command => command.name), ['follow', 'follow', 'follow']);
+}
+
+// The harness models native state updates and injects Rust's release result.
+// The source predicates above determine which commands/results may apply.
+function androidWiring(style) {
+  const wiring = createWiring(style, 'android');
+  const state = {
+    generation: wiring.generation, session: 1, attached: true, failed: false,
+    following: true, ownershipEpoch: 0, gestureEpoch: -1, dragging: false, releasePending: false,
+  };
+  function apply(command) {
+    const { epoch, generation: commandGeneration } = command;
+    if (command.name === 'follow' || command.name === 'reserve') {
+      if (wrongCommandTrack({ ...state, commandGeneration, epoch }) ||
+          oldCommand({ ...state, nextEpoch: epoch })) return false;
+      state.ownershipEpoch = epoch;
+      state.gestureEpoch = command.gesture && !command.value ? epoch : -1;
+      state.dragging = false;
+      state.releasePending = false;
+      state.following = command.value;
+      return true;
+    }
+    if (!ownsMovement({ ...state, epoch, commandGeneration })) return false;
+    if (command.name === 'scroll') {
+      state.dragging = true;
+      return true;
+    }
+    assert.equal(command.name, 'fling');
+    if (!state.dragging) return false;
+    state.dragging = false;
+    state.gestureEpoch = -1;
+    state.releasePending = true;
+    const { session: releaseSession, generation: releaseGeneration, ownershipEpoch: releaseEpoch } = state;
+    return resumed => {
+      if (!currentRelease({ ...state, releaseSession, releaseGeneration, releaseEpoch })) return false;
+      state.releasePending = false;
+      if (resumed) {
+        state.following = true;
+        wiring.follow(releaseEpoch);
+      }
+      return true;
+    };
+  }
+  wiring.ready();
+  assert.equal(apply(wiring.bridge.shift()), true);
+  return { ...wiring, state, apply };
+}
+
+for (const style of ['spicy', 'amll']) {
+  for (const [dy, resumed] of [[-45, true], [45, false]]) {
+    const wiring = androidWiring(style);
+    wiring.grant(); wiring.move(dy / 20); wiring.move(dy / 3); wiring.move(dy); wiring.release(); wiring.release();
+    const [grant, first, second, release] = wiring.bridge;
+    assert.deepEqual(wiring.bridge.map(command => command.name), ['follow', 'scroll', 'scroll', 'fling']);
+    assert.equal(grant.value, false, 'touch-down takes follow ownership before the first delta');
+    assert.equal(grant.gesture, true);
+    assert.equal(first.delta, -dy / 3, 'first delta includes the travel across slop');
+    assert.equal(first.delta + second.delta, -dy, 'forward exactly one logical delta per move with the right sign');
+    assert.equal(Math.sign(release.velocity), -Math.sign(dy));
+    assert.ok(wiring.bridge.every(command => command.epoch === grant.epoch && command.generation === wiring.generation));
+    assert.equal(parentFollow, false);
+    assert.equal(wiring.apply(first), false, 'movement cannot precede its grant');
+    assert.equal(wiring.apply(grant), true);
+    assert.equal(wiring.apply({ ...first, generation: first.generation - 1 }), false, 'old generation delta cannot move this track');
+    assert.equal(wiring.apply(release), false, 'a release requires a native delta');
+    assert.equal(wiring.apply(first), true);
+    assert.equal(wiring.apply(second), true);
+    const finish = wiring.apply(release);
+    assert.equal(wiring.apply(release), false, 'duplicate release cannot reopen the gesture');
+    assert.equal(wiring.apply(first), false, 'last delta cannot reopen the released gesture');
+    assert.equal(finish(resumed), true);
+    assert.equal(finish(true), false, 'the result can be consumed only once');
+    assert.equal(wiring.state.following, resumed);
+    assert.equal(parentFollow, resumed, 'only a current native recapture resumes JS follow');
+  }
+
+  for (const end of ['terminate', 'deactivate', 'grant']) {
+    const wiring = androidWiring(style);
+    wiring.grant(); wiring.move(-25); wiring[end]();
+    if (end !== 'grant') wiring.release();
+    const [grant, delta, cancel, next] = wiring.bridge;
+    assert.deepEqual(wiring.bridge.map(command => command.name),
+      end === 'grant' ? ['follow', 'scroll', 'fling', 'follow'] : ['follow', 'scroll', 'fling']);
+    assert.equal(cancel.velocity, 0, end + ' settles the previous drag without inertia');
+    assert.equal(cancel.epoch, grant.epoch);
+    assert.equal(wiring.apply(grant), true);
+    assert.equal(wiring.apply(delta), true);
+    const finish = wiring.apply(cancel);
+    if (next) {
+      assert.ok(next.epoch > cancel.epoch);
+      assert.equal(wiring.apply(next), true);
+      assert.equal(finish(true), false, 'a replacement grant supersedes cancellation recapture');
+    } else {
+      assert.equal(finish(true), true, 'a current zero-velocity release can recapture');
+    }
+    assert.deepEqual(wiring.presses, []);
+  }
+
+  for (const supersede of ['grant', 'reveal', 'resume', 'track', 'surface', 'error']) {
+    const wiring = androidWiring(style);
+    wiring.grant(); wiring.move(-30); wiring.release();
+    const [grant, delta, release] = wiring.bridge.splice(0);
+    wiring.apply(grant); wiring.apply(delta);
+    const finish = wiring.apply(release);
+    if (supersede === 'grant' || supersede === 'reveal') {
+      wiring.setReveal(supersede === 'reveal');
+      wiring.grant();
+      // Drop the delivered event before letting the corresponding new native
+      // command arrive. JS has advanced its ownership epoch independently.
+      wiring.follow(release.epoch);
+      assert.equal(parentFollow, false);
+      const [next] = wiring.bridge;
+      assert.equal(next.name, supersede === 'reveal' ? 'reserve' : 'follow');
+      assert.equal(next.value, false, 'reveal preserves the existing manual intent');
+      assert.equal(wiring.apply(next), true);
+      wiring.terminate();
+      assert.equal(wiring.bridge.length, 1, 'an unmoved cancellation has no native motion');
+    } else if (supersede === 'resume') {
+      assert.equal(wiring.apply({ ...grant, epoch: grant.epoch + 1, gesture: false, value: true }), true);
+    } else if (supersede === 'track') {
+      wiring.state.generation++;
+    } else if (supersede === 'surface') {
+      wiring.state.session++;
+    } else {
+      wiring.state.failed = true;
+    }
+    assert.equal(finish(true), false, supersede + ' invalidates a pending release');
+    assert.equal(wiring.apply(delta), false);
+    assert.equal(wiring.apply(grant), false);
+    assert.equal(parentFollow, false);
+  }
+
+  // Replacing the packet cancels the old JS drag even on the same track.
+  {
+    const wiring = androidWiring(style);
+    wiring.grant(); wiring.move(-35);
+    store.showTranslatedText = false;
+    assert.notEqual(wiring.readyReplacement().generation, wiring.generation);
+    wiring.move(-45); wiring.release();
+    assert.deepEqual(wiring.bridge.map(command => command.name), ['follow', 'scroll', 'follow']);
+  }
+}
+
 assert.match(swift, /lateGestureOwnershipAllowed\(value, gesture: gesture, nextEpoch: nextEpoch, identity: UInt64\(commandGeneration\)\)/);
 assert.match(swift, /emitRecapturedFollow\(\)/);
-assert.match(android, /lateGestureOwnershipAllowed\(value, gesture, nextEpoch\)/);
-assert.match(android, /emitRecapturedFollow\(\)/);
+assert.match(android, /val releaseMayHaveChangedFollow = releasePending \|\| following != value\s*clearGesture\(\)[\s\S]*?if \(releaseMayHaveChangedFollow\) \{\s*following = value\s*owner\?\.setFollowing\(value\)/);
 assert.match(read('../components/lyrics/rust/rust-lyrics-view.tsx'), /issue\(enabled, followGeneration\.current, true\)/);
-console.log('Rust follow wiring PASS: delayed false, late JS grant, far release, stale A/B and generation recreation across Spicy/AMLL.');
+
+(async () => {
+  // A row tap restores follow and seeks without sending drag commands.
+  const wiring = androidWiring('spicy');
+  wiring.grant(); wiring.release();
+  await flush();
+  assert.deepEqual(wiring.bridge.map(command => command.name), ['follow', 'follow']);
+  assert.deepEqual(wiring.bridge.map(command => command.value), [false, true]);
+  assert.equal(wiring.presses.length, 1);
+
+  const reveal = androidWiring('spicy');
+  reveal.setReveal(true);
+  reveal.grant(); reveal.release();
+  assert.deepEqual(reveal.bridge.map(command => command.name), ['reserve']);
+  assert.equal(reveal.bridge[0].value, true);
+  assert.equal(parentFollow, true);
+  assert.deepEqual(reveal.presses, []);
+  reveal.bridge.length = 0;
+  reveal.grant(); reveal.move(15); reveal.terminate();
+  const [reservation, promotion, delta, cancel] = reveal.bridge;
+  assert.deepEqual(reveal.bridge.map(command => command.name), ['reserve', 'follow', 'scroll', 'fling']);
+  assert.ok(promotion.epoch > reservation.epoch, 'reveal drag takes ownership only after crossing slop');
+  assert.equal(delta.delta, -15);
+  assert.equal(delta.epoch, promotion.epoch);
+  assert.equal(cancel.velocity, 0);
+
+  const staleTap = androidWiring('amll');
+  staleTap.grant(); staleTap.release();
+  store.showTranslatedText = false;
+  assert.notEqual(staleTap.readyReplacement().generation, staleTap.generation);
+  await flush();
+  assert.deepEqual(staleTap.presses, [], 'an old async hit cannot seek after a packet replacement');
+  assert.deepEqual(staleTap.bridge.map(command => command.value), [false, false]);
+  console.log('Rust follow wiring PASS: UIKit handoff, Android movement and cancellation, and stale ownership across Spicy/AMLL.');
+})().catch(error => { console.error(error); process.exitCode = 1; });

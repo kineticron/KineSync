@@ -6,10 +6,7 @@ import android.graphics.SurfaceTexture
 import android.os.Handler
 import android.os.Looper
 import android.view.Choreographer
-import android.view.MotionEvent
 import android.view.TextureView
-import android.view.VelocityTracker
-import android.view.ViewConfiguration
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.viewevent.EventDispatcher
@@ -39,17 +36,11 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   private var enabled = true
   // Desired follow ownership, replayed when the owner is created or the track changes.
   private var following = true
-  // Invalidates an asynchronous release handoff after a newer touch, track or follow command.
-  private var followEpoch = 0L
-  // A queued JS touch-down false must not undo a release recapture.
-  private var releasePending = false
-  private var releaseRecaptured = false
-  private var releaseSerial = 0L
-  // JS ownership epochs order touches, parent changes and track resets. Native
-  // rejects true commands from an older epoch and while a newer touch is active.
+  // One JS epoch orders follow commands and owns any drag on this generation.
   private var ownershipEpoch = 0L
-  private var ownershipFloor = 0L
-  private var touchActive = false
+  private var gestureEpoch = -1L
+  private var dragging = false
+  private var releasePending = false
   private var foreground = true
   private var attached = false
   private var busy = false
@@ -87,13 +78,6 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
   private var intervalMs = 0.0
   private var requestedHz = 0.0
 
-  // Gesture state. Rust takes logical (dp) units.
-  private var velocity: VelocityTracker? = null
-  private var downY = 0f
-  private var lastY = 0f
-  private var dragging = false
-  private val slop = ViewConfiguration.get(context).scaledTouchSlop
-  private val maxFling = ViewConfiguration.get(context).scaledMaximumFlingVelocity.toFloat()
   private val density get() = resources.displayMetrics.density
 
   companion object { private val retryDelays = longArrayOf(100, 200, 400, 800) }
@@ -114,55 +98,6 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     textureView.layout(0, 0, w, h)
   }
 
-  // Observe touches without consuming them so JS keeps tap and hold classification.
-  override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-    when (ev.actionMasked) {
-      MotionEvent.ACTION_DOWN -> {
-        velocity?.recycle(); velocity = VelocityTracker.obtain()
-        downY = ev.y; lastY = ev.y; dragging = false
-        // Invalidate an in-flight release before queued JS ownership arrives.
-        releasePending = false
-        releaseRecaptured = false
-        touchActive = true
-        ownershipFloor = maxOf(ownershipFloor, ownershipEpoch + 1)
-        followEpoch++
-      }
-      MotionEvent.ACTION_MOVE -> {
-        velocity?.addMovement(ev)
-        if (!dragging && kotlin.math.abs(ev.y - downY) > slop) {
-          dragging = true; takeOwnership()
-          parent?.requestDisallowInterceptTouchEvent(true)
-        }
-        if (dragging) {
-          val dy = ev.y - lastY
-          owner?.scrollBy(-dy / density.toDouble()); markDirty(); lifecycle()
-        }
-        lastY = ev.y
-      }
-      MotionEvent.ACTION_UP -> {
-        velocity?.addMovement(ev)
-        touchActive = false
-        if (dragging) {
-          velocity?.computeCurrentVelocity(1000, maxFling)
-          fling(-(velocity?.yVelocity ?: 0f) / density.toDouble() / 1000.0)
-        }
-        velocity?.recycle(); velocity = null; dragging = false
-      }
-      MotionEvent.ACTION_CANCEL -> {
-        touchActive = false
-        if (dragging) fling(0.0)
-        velocity?.recycle(); velocity = null; dragging = false
-      }
-    }
-    velocity?.let { if (ev.actionMasked == MotionEvent.ACTION_DOWN) it.addMovement(ev) }
-    return super.dispatchTouchEvent(ev)
-  }
-
-  // Claim the gesture so Android keeps routing MOVE/UP here for native drag and fling.
-  // dispatchTouchEvent only observes; the React root still sees every event through its
-  // own intercept path, so JS tap and hold classification is untouched. No native-gesture takeover.
-  override fun onTouchEvent(event: MotionEvent): Boolean = true
-
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
     attached = true; foreground = windowVisibility == VISIBLE
@@ -172,7 +107,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     super.onDetachedFromWindow()
     attached = false
     updatePresentationVisibility()
-    velocity?.recycle(); velocity = null; dragging = false
+    clearGesture()
     Choreographer.getInstance().removeFrameCallback(this); callbackPosted = false
     cancelRetry(); cancelCue()
     owner?.setVisible(false)
@@ -206,6 +141,7 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     val o = owner
     if (o != null) { o.dispose(); owner = null } else st.release()
     texture = null
+    clearGesture()
     session++; busy = false; animating = false
     displayedGeneration = -1L
     updatePresentationVisibility()
@@ -247,15 +183,13 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     if (id <= generation) return
     val nextTrackId = try { JSONObject(value).getString("track_id") } catch (_: Exception) { return }
     generation = id; sequence = 0; anchor = null; animating = false
-    ownershipEpoch = 0; ownershipFloor = 0; touchActive = false
-    releasePending = false; releaseRecaptured = false
+    ownershipEpoch = 0
+    clearGesture()
     // Only a track identity change restores follow. Translation, credit and
     // layout revisions keep the user's manual ownership.
     if (nextTrackId != trackId) {
       trackId = nextTrackId
       following = true
-      releasePending = false
-      followEpoch++
     }
     failed = false; updatePresentationVisibility()
     track = value; markDirty(); refresh(); lifecycle()
@@ -284,75 +218,63 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     if (value) { markDirty(); refresh() }
     lifecycle()
   }
-  fun setFollowing(value: Boolean, epoch: Double, commandGeneration: Double, gesture: Boolean) {
-    if (!epoch.isFinite() || epoch < 0 || !commandGeneration.isFinite() || commandGeneration < 0) return
-    if (commandGeneration.toLong() != generation) return
+  private fun advanceOwnership(epoch: Double, commandGeneration: Double): Boolean {
+    if (commandGeneration != generation.toDouble() || !epoch.isFinite()) return false
     val nextEpoch = epoch.toLong()
-    // A delayed touch-down false belongs to the release gesture even when the
-    // near recapture already won physical ownership. Record its epoch without
-    // undoing the recapture, then re-announce the recapture at that epoch so JS
-    // can accept the current gesture instead of rejecting an older event.
-    if (lateGestureOwnershipAllowed(value, gesture, nextEpoch)) {
-      ownershipEpoch = nextEpoch
-      if (releaseRecaptured) emitRecapturedFollow()
-      return
-    }
-    if (!followCommandAllowed(value, nextEpoch)) return
+    if (nextEpoch <= ownershipEpoch) return false
     ownershipEpoch = nextEpoch
-    if (value) ownershipFloor = maxOf(ownershipFloor, nextEpoch)
-    releasePending = false
-    releaseRecaptured = false
-    following = value; followEpoch++; owner?.setFollowing(value); markDirty(); lifecycle()
-  }
-  private fun lateGestureOwnershipAllowed(value: Boolean, gesture: Boolean, nextEpoch: Long): Boolean {
-    if (nextEpoch <= ownershipEpoch) return false
-    if (value || !gesture || !releasePending) return false
     return true
   }
-  private fun emitRecapturedFollow() {
-    onStatus(mapOf("state" to "follow", "generation" to generation,
-      "ownershipEpoch" to ownershipEpoch,
-      "message" to "Auto-follow resumed near the active line"))
-  }
-  // A true from before a newer touch, or while that touch owns the viewport,
-  // must not reclaim follow even when its JS callback is delayed.
-  private fun followCommandAllowed(value: Boolean, nextEpoch: Long): Boolean {
-    if (nextEpoch <= ownershipEpoch) return false
-    if (value && (touchActive || nextEpoch <= ownershipFloor)) return false
-    return true
-  }
-  // Native drag starts ownership without consuming a JS epoch. The following
-  // JS false command still records the epoch and keeps command ordering intact.
-  private fun takeOwnership() {
+  private fun clearGesture() {
+    gestureEpoch = -1L
+    dragging = false
     releasePending = false
-    releaseRecaptured = false
-    following = false
-    followEpoch++
-    owner?.setFollowing(false)
-    markDirty(); lifecycle()
   }
-  fun scrollBy(dy: Double) {
-    if (!dy.isFinite() || dy == 0.0) return
-    owner?.scrollBy(dy); markDirty(); lifecycle()
+  fun setFollowing(value: Boolean, epoch: Double, commandGeneration: Double, gesture: Boolean) {
+    if (!advanceOwnership(epoch, commandGeneration)) return
+    clearGesture()
+    if (gesture && !value) gestureEpoch = ownershipEpoch
+    following = value
+    owner?.setFollowing(value); markDirty(); lifecycle()
   }
-  fun fling(v: Double) {
-    if (!v.isFinite()) return
+  fun reserveTouchEpoch(value: Boolean, epoch: Double, commandGeneration: Double) {
+    if (!advanceOwnership(epoch, commandGeneration)) return
+    val releaseMayHaveChangedFollow = releasePending || following != value
+    clearGesture()
+    // A reveal touch preserves JS follow intent. Reapply it only when the
+    // preceding release may already have changed the worker's follow state.
+    if (releaseMayHaveChangedFollow) {
+      following = value
+      owner?.setFollowing(value); markDirty(); lifecycle()
+    }
+  }
+  private fun ownsGesture(epoch: Double, commandGeneration: Double): Boolean =
+    attached && !failed && gestureEpoch > 0 && epoch == gestureEpoch.toDouble() &&
+      commandGeneration == generation.toDouble()
+
+  fun scrollBy(dy: Double, epoch: Double, commandGeneration: Double) {
+    if (!ownsGesture(epoch, commandGeneration) || !dy.isFinite() || dy == 0.0) return
+    val o = owner ?: return
+    dragging = true
+    o.scrollBy(dy); markDirty(); lifecycle()
+  }
+  fun fling(v: Double, epoch: Double, commandGeneration: Double) {
+    if (!ownsGesture(epoch, commandGeneration) || !v.isFinite() || !dragging) return
+    val o = owner ?: return
     val releaseSession = session
     val releaseGeneration = generation
-    val releaseEpoch = followEpoch
-    releaseSerial++
-    val serial = releaseSerial
+    val releaseEpoch = ownershipEpoch
+    clearGesture()
     releasePending = true
-    releaseRecaptured = false
-    owner?.fling(v, RustBridge.nowMs()) { resumed ->
-      if (session == releaseSession && generation == releaseGeneration && followEpoch == releaseEpoch && releaseSerial == serial && !failed) {
+    o.fling(v, RustBridge.nowMs()) { resumed ->
+      if (session == releaseSession && generation == releaseGeneration &&
+        ownershipEpoch == releaseEpoch && releasePending && !failed) {
+        releasePending = false
         if (resumed) {
           following = true
-          releaseRecaptured = true
-          emitRecapturedFollow()
-        } else {
-          releasePending = false
-          releaseRecaptured = false
+          onStatus(mapOf("state" to "follow", "generation" to releaseGeneration,
+            "ownershipEpoch" to releaseEpoch,
+            "message" to "Auto-follow resumed near the active line"))
         }
       }
     }
@@ -369,7 +291,8 @@ class KineSyncRustLyricsView(context: Context, appContext: AppContext) : ExpoVie
     val o = owner ?: return
     val d = density
     o.update(track, generation, anchor, width, height, d)
-    o.setFollowing(following)
+    // The worker may have recaptured already while the result is in flight.
+    if (!releasePending) o.setFollowing(following)
   }
 
   // Alpha preserves the TextureView surface while inactive. Every presentation,

@@ -13,6 +13,7 @@ const header = path.resolve(d, "src/main/cpp", "../../../../../../../native/lyri
 if (!fs.existsSync(header)) errs.push("header path unresolved " + header);
 const view = fs.readFileSync(path.join(d, "src/main/java/dev/kineticron/rustlyrics/KineSyncRustLyricsView.kt"), "utf8");
 const owner = fs.readFileSync(path.join(d, "src/main/java/dev/kineticron/rustlyrics/RustOwner.kt"), "utf8");
+const moduleSource = fs.readFileSync(path.join(d, "src/main/java/dev/kineticron/rustlyrics/KineSyncRustLyricsModule.kt"), "utf8");
 const metrics = cpp.match(/^FN\(jboolean, fillMetrics\)\(JNIEnv \*env, jobject, jlong p, jdoubleArray out\) \{([\s\S]*?)\n\}/m)?.[1] || "";
 const metricSlots = [
   ["FRAMES", "frames"], ["GENERATION", "generation"], ["POSITION", "position_ms"],
@@ -93,12 +94,31 @@ if (!gate) {
 }
 if (!/override fun onLayout/.test(view)) errs.push("view must lay out its TextureView");
 if (!/onSurfaceTextureDestroyed[\s\S]*?removeFrameCallback/.test(view)) errs.push("destroy must cancel Choreographer");
-if (!/onDetachedFromWindow[\s\S]*?velocity\?\.recycle/.test(view)) errs.push("detach must recycle VelocityTracker");
 if (!/profilerReason/.test(owner)) errs.push("metrics need profilerReason");
 if (/new Owner\{/.test(cpp)) errs.push("use nothrow new");
-if (!/override fun onTouchEvent\(event: MotionEvent\): Boolean = true/.test(view)) errs.push("view must claim touches via onTouchEvent");
-if (!/override fun dispatchTouchEvent[\s\S]*?return super\.dispatchTouchEvent/.test(view)) errs.push("dispatchTouchEvent must still delegate to super");
-if (/requestDisallowInterceptTouchEvent\(true\)/.test(view) === false) errs.push("drag should disallow parent intercept once dragging");
+if (/dispatchTouchEvent|onTouchEvent|onInterceptTouchEvent|VelocityTracker|MotionEvent|requestDisallowInterceptTouchEvent|touchActive|ownershipFloor/.test(view)) {
+  errs.push("Android must leave touch classification and movement to JS");
+}
+for (const name of ["setTrack", "onDetachedFromWindow", "onSurfaceTextureDestroyed"]) {
+  if (!/clearGesture\(\)/.test(viewMethod(name))) errs.push(name + " must invalidate Android gesture ownership");
+}
+for (const [name, args] of [
+  ["setFollowing", "value, epoch, generation, gesture"],
+  ["reserveTouchEpoch", "value, epoch, generation"],
+  ["scrollBy", "dy, epoch, generation"],
+  ["fling", "velocity, epoch, generation"],
+]) {
+  const forward = `-> view.${name}(${args}) }.runOnQueue(Queues.MAIN)`;
+  if (!moduleSource.split("\n").some(line => line.includes(`AsyncFunction("${name}")`) && line.includes(forward))) {
+    errs.push(name + " must forward the JS ownership arguments on the main queue");
+  }
+}
+for (const name of ["scrollBy", "fling"]) {
+  const call = new RegExp("\\." + name + "\\(", "g");
+  if ((view.match(call) || []).length !== 1 || !viewMethod(name).includes("o." + name + "(")) {
+    errs.push(name + " must have exactly one forwarding path to the Rust owner");
+  }
+}
 if (!/kPremul/.test(cpp)) errs.push("JNI creation boundary must document premultiplied alpha");
 if (errs.length) { console.error(errs.join("\n")); process.exit(1); }
 console.log("android JNI contract ok:", ext.length, "functions");

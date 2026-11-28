@@ -17,7 +17,15 @@ import { getStaticLineText, StaticLyricsView } from './static-lyrics-view';
 import { RustFpsOverlay } from './rust-fps-overlay';
 
 type NativeApi = { abiVersion(): number; monotonicMs(): number; frameTraceAvailable?(): boolean };
-type NativeRef = { setAnchor(value: string): Promise<void>; setFollowing(value: boolean, epoch: number, generation: number, gesture: boolean): Promise<void>; scrollBy(dy: number): Promise<void>; fling(velocity: number): Promise<void>; hitTest(x: number, y: number): Promise<number>; exportFrameTrace?(session: string): Promise<string> };
+type NativeRef = {
+  setAnchor(value: string): Promise<void>;
+  setFollowing(value: boolean, epoch: number, generation: number, gesture: boolean): Promise<void>;
+  reserveTouchEpoch(value: boolean, epoch: number, generation: number): Promise<void>;
+  scrollBy(dy: number, epoch: number, generation: number): Promise<void>;
+  fling(velocity: number, epoch: number, generation: number): Promise<void>;
+  hitTest(x: number, y: number): Promise<number>;
+  exportFrameTrace?(session: string): Promise<string>;
+};
 type Props = ViewProps & { trackJson: string; active: boolean; ref?: React.Ref<NativeRef>;
   onStatus(event: { nativeEvent: { state: string; message: string; generation: number; ownershipEpoch?: number } }): void;
   traceSession?: string;
@@ -154,41 +162,62 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const setFollow = useCallback((enabled: boolean) => {
     sendFollow(follow.current.issue(enabled, followGeneration.current, true));
   }, [follow, sendFollow]);
-  const gesture = useMemo(() => createRustLyricsGesture({
-    hitTest: (y, x) => native.current ? native.current.hitTest(x, y) : Promise.resolve(-1),
-    // UIKit pan recognizer drives drag/fling directly on the native owner.
-    scrollBy: () => {},
-    fling: () => {},
-    setFollowing: setFollow,
-    tapEnabled: () => latest.current.tapToSeekEnabled,
-    shouldRevealTap: pageY => latest.current.shouldRevealTap?.(pageY) ?? false,
-    // Native down advances its epoch floor even without pan ownership. Reserve
-    // that epoch locally so the next resume can pass the native guard, without
-    // sending true/false commands that would freeze follow or reset grace.
-    reserveTouchEpoch: () => { follow.current.issue(follow.current.desired, followGeneration.current, true); },
-    onFooterPress: target => {
-      const value = latest.current;
-      if (target === -2) value.onCreditsTimestampPress?.(Math.max(0, ...value.lyrics.map(line => line.lineEndTime)));
-      else {
-        const profile = target === -3 ? value.metadata?.attribution?.maker : value.metadata?.attribution?.uploader;
-        if (profile?.url && /^https:\/\//i.test(profile.url)) void Linking.openURL(profile.url).catch(() => {});
-      }
-    },
-    onLinePress: index => { const line = latest.current.lyrics[index]; if (line) latest.current.onLinePress?.(line); },
-    onLineLongPress: index => { const line = latest.current.lyrics[index]; if (line) latest.current.onLineLongPress?.(line); },
-    onAutoFollowChange: enabled => latest.current.onAutoFollowChange?.(enabled),
-    onUserInteraction: () => latest.current.onUserInteraction?.(),
-  }), [setFollow]);
+  const androidGestureGeneration = Platform.OS === 'android' ? revision.generation : undefined;
+  const androidGestureSurface = Platform.OS === 'android' ? surfaceEpoch : undefined;
+  const gesture = useMemo(() => {
+    const isCurrent = () => androidGestureGeneration === undefined ||
+      (identity.current.generation === androidGestureGeneration && identity.current.surfaceEpoch === androidGestureSurface);
+    return createRustLyricsGesture({
+      hitTest: (y, x) => native.current ? native.current.hitTest(x, y) : Promise.resolve(-1),
+      // Android PanResponder supplies logical dp and dp/ms. UIKit supplies iOS movement directly.
+      scrollBy: dy => {
+        if (androidGestureGeneration !== undefined && isCurrent()) {
+          send(view => view.scrollBy(dy, follow.current.epoch, androidGestureGeneration));
+        }
+      },
+      fling: velocity => {
+        if (androidGestureGeneration !== undefined && isCurrent()) {
+          send(view => view.fling(velocity, follow.current.epoch, androidGestureGeneration));
+        }
+      },
+      setFollowing: enabled => { if (isCurrent()) setFollow(enabled); },
+      tapEnabled: () => latest.current.tapToSeekEnabled,
+      shouldRevealTap: pageY => latest.current.shouldRevealTap?.(pageY) ?? false,
+      reserveTouchEpoch: () => {
+        if (!isCurrent()) return;
+        const command = follow.current.issue(follow.current.desired, followGeneration.current, true);
+        // UIKit already observes touch-down. Android reserves the reveal touch
+        // explicitly so it can invalidate a release without taking ownership.
+        if (androidGestureGeneration !== undefined) {
+          send(view => view.reserveTouchEpoch(command.value, command.epoch, command.generation));
+        }
+      },
+      onFooterPress: target => {
+        const value = latest.current;
+        if (target === -2) value.onCreditsTimestampPress?.(Math.max(0, ...value.lyrics.map(line => line.lineEndTime)));
+        else {
+          const profile = target === -3 ? value.metadata?.attribution?.maker : value.metadata?.attribution?.uploader;
+          if (profile?.url && /^https:\/\//i.test(profile.url)) void Linking.openURL(profile.url).catch(() => {});
+        }
+      },
+      onLinePress: index => { const line = latest.current.lyrics[index]; if (line) latest.current.onLinePress?.(line); },
+      onLineLongPress: index => { const line = latest.current.lyrics[index]; if (line) latest.current.onLineLongPress?.(line); },
+      onAutoFollowChange: enabled => latest.current.onAutoFollowChange?.(enabled),
+      onUserInteraction: () => latest.current.onUserInteraction?.(),
+    });
+  }, [androidGestureGeneration, androidGestureSurface, send, setFollow]);
   const panResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: event => gesture.grant(event.nativeEvent.locationY, event.nativeEvent.locationX, event.nativeEvent.pageY),
+    onPanResponderGrant: event => {
+      if (Platform.OS === 'android' && gesture.isActive()) gesture.terminate();
+      gesture.grant(event.nativeEvent.locationY, event.nativeEvent.locationX, event.nativeEvent.pageY);
+    },
     onPanResponderMove: (_event, state) => gesture.move(state.dy, state.dx),
     onPanResponderRelease: () => gesture.release(),
     onPanResponderTerminate: () => gesture.terminate(),
     onPanResponderTerminationRequest: () => false,
-    // Keep Android's native drag stream while JS classifies taps and holds.
-    onShouldBlockNativeResponder: () => Platform.OS !== 'android',
+    onShouldBlockNativeResponder: () => true,
   }), [gesture]);
   useEffect(() => () => gesture.terminate(), [gesture, showStaticLyrics]);
   useEffect(() => {
@@ -328,6 +357,9 @@ export const RustLyricsView = memo(function RustLyricsView({ active, previewPosi
   const nativeGestureReady = active && interactive && rustLyricsAvailable && !!payload.json &&
     !unavailable && !failed && readySurface?.generation === revision.generation &&
     readySurface.surfaceEpoch === surfaceEpoch;
+  useLayoutEffect(() => {
+    if (Platform.OS === 'android' && nativeGestureReady) return () => gesture.terminate();
+  }, [gesture, nativeGestureReady]);
   const ownsReveal = !!shouldRevealTap && !!onUserInteraction &&
     ((showStaticLyrics && interactive) || nativeGestureReady);
   useLayoutEffect(() => {

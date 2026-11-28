@@ -19,8 +19,9 @@ class KineSyncRustLyricsModule : Module() {
       }
       AsyncFunction("setAnchor") { view: KineSyncRustLyricsView, value: String -> view.setAnchor(value) }.runOnQueue(Queues.MAIN)
       AsyncFunction("setFollowing") { view: KineSyncRustLyricsView, value: Boolean, epoch: Double, generation: Double, gesture: Boolean -> view.setFollowing(value, epoch, generation, gesture) }.runOnQueue(Queues.MAIN)
-      AsyncFunction("scrollBy") { view: KineSyncRustLyricsView, dy: Double -> view.scrollBy(dy) }.runOnQueue(Queues.MAIN)
-      AsyncFunction("fling") { view: KineSyncRustLyricsView, velocity: Double -> view.fling(velocity) }.runOnQueue(Queues.MAIN)
+      AsyncFunction("reserveTouchEpoch") { view: KineSyncRustLyricsView, value: Boolean, epoch: Double, generation: Double -> view.reserveTouchEpoch(value, epoch, generation) }.runOnQueue(Queues.MAIN)
+      AsyncFunction("scrollBy") { view: KineSyncRustLyricsView, dy: Double, epoch: Double, generation: Double -> view.scrollBy(dy, epoch, generation) }.runOnQueue(Queues.MAIN)
+      AsyncFunction("fling") { view: KineSyncRustLyricsView, velocity: Double, epoch: Double, generation: Double -> view.fling(velocity, epoch, generation) }.runOnQueue(Queues.MAIN)
       AsyncFunction("hitTest") { view: KineSyncRustLyricsView, x: Double, y: Double, promise: Promise -> view.hitTest(x, y, promise) }.runOnQueue(Queues.MAIN)
     }
   }
